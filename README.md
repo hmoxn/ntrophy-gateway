@@ -23,8 +23,8 @@
 |---|---|
 | D. `/admin/dashboard`, `/timeseries`, `/events` | 홈: 상태 카드, 한도 막대, 호출 수 비교 차트, 실시간 알림 |
 | D. `/admin/incidents` | 사고 탭, 차단 순간 자동 팝업 |
-| C. `/admin/settings` | 키·한도 → 허용 무단 호출 수 |
-| C. `/admin/credentials`, I. `/{provider}/provision` | 키·한도 → 공급자 크레덴셜, 실제 공급자 키 만들기 |
+| C. `/admin/settings` | 키·한도 → **한도**: 건수(경고 N건 · 차단 M건, 허용 오차 없음) 또는 사용량(한도의 10/50/70%) |
+| C. `/admin/credentials`, I. `/{provider}/provision` | 키·한도 → **키 관리**(목록·등록·폐기), **키 만들기**(사람·팀·공유 단위로 여러 키를 한 번에) |
 | C. `/admin/cidrs`, `/services`, `/tokens`, `/access-denied` | 접근 제어 |
 | E. 허니키, 서비스 정지/재개 | 접근 제어, 데모 제어 |
 | H. `/admin/usage/*` | 사용량 탭 (집계·월말 예측·예산) |
@@ -69,3 +69,7 @@ client.chat.completions.create(model="mock", messages=[{"role": "user", "content
 - 상태색(초록·노랑·빨강)은 상태에만 쓰고 항상 글자·아이콘과 함께 씁니다.
 - 화면에서 가장 큰 것은 “게이트웨이가 모르는 호출” 숫자 하나입니다.
 - 현재 이 웹 디자인은 테스트 버전입니다.
+
+### 건수 기준과 실서버
+건수 기준(`limit_mode=count`, `count_warn_calls`, `count_block_calls`)은 시뮬레이션에서는 바로 동작한다.
+실서버는 백엔드가 이 설정을 알아야 해서, 서버가 `limit_mode`를 돌려주지 않으면 화면이 건수 기준 저장을 막고 이유를 보여 준다.

@@ -8,7 +8,7 @@
   const PAGES = [
     { id: 'home', label: '홈', icon: 'home', sub: '게이트웨이 기록과 공급자 보고를 2초마다 대조해요' },
     { id: 'usage', label: '사용량', icon: 'chart', sub: '게이트웨이가 중계한 호출의 토큰과 비용' },
-    { id: 'keys', label: '키·한도', icon: 'key', sub: '판정 기준이 되는 한도와 공급자 크레덴셜' },
+    { id: 'keys', label: '키·한도', icon: 'key', sub: '공급자 키를 관리하고 새로 만들고, 판정 한도를 정해요' },
     { id: 'access', label: '접근 제어', icon: 'shield', sub: '누가 어디에서 게이트웨이를 부를 수 있는지' },
     { id: 'incidents', label: '사고', icon: 'alert', sub: '자동 차단과 허니키 탐지가 남긴 기록' },
   ];
@@ -39,6 +39,7 @@
   const st = {
     page: null, dash: null, range: 300, lastEvent: 0, feed: [], incident: null,
     traffic: false, trafficTimer: null, trafficN: 0, lastErr: {}, usageRange: 'day', liveSheet: null,
+    sub: null, creds: null, credFilter: 'all',
   };
 
   // 정적 아이콘 채우기
@@ -52,14 +53,14 @@
   }
   document.addEventListener('click', (e) => {
     const b = e.target.closest('[data-go]');
-    if (b) { location.hash = b.dataset.go; }
+    if (b) { e.preventDefault(); location.hash = b.dataset.go; }
   });
   addEventListener('hashchange', route);
 
   function route() {
-    const id = (location.hash.slice(1) || 'home');
+    const [id, sub] = (location.hash.slice(1) || 'home').split('/'); // 하위 화면: #keys/create
     const page = PAGES.find((p) => p.id === id) || PAGES[0];
-    st.page = page.id;
+    st.page = page.id; st.sub = sub || null;
     $('#pageTitle').textContent = page.label;
     $('#pageSub').textContent = page.sub;
     renderNav();
@@ -108,7 +109,7 @@
             <div class="chart" id="chart"></div>
           </div>
           <div class="card">
-            <div class="card-h"><div><h2>키 전환 순서</h2><p>주 키가 폐기되면 위에서부터 예비 키가 이어받아요</p></div><div class="spacer"></div><button class="btn sm soft" data-go="keys">관리</button></div>
+            <div class="card-h"><div><h2>키 전환 순서</h2><p>주 키가 폐기되면 위에서부터 예비 키가 이어받아요</p></div><div class="spacer"></div><button class="btn sm soft" data-go="keys/manage">관리</button></div>
             <div class="list" id="credList"></div>
           </div>
         </div>
@@ -134,7 +135,19 @@
     refreshChart();
   }
 
-  const ratiosOf = (d) => { const w = d.warn_at_calls / d.limit_calls; return w > 0.4 ? [0.1, 0.5, 0.7] : [0.05, 0.2, 0.35]; };
+  const ratiosOf = (d) => {
+    if (d.limit_mode === 'count') return ['openrouter', 'openai'].includes(d.active_credential && d.active_credential.provider) ? [0.05, 0.2, 0.35] : [0.1, 0.5, 0.7];
+    const w = d.warn_at_calls / d.limit_calls; return w > 0.4 ? [0.1, 0.5, 0.7] : [0.05, 0.2, 0.35];
+  };
+  // 홈 막대의 눈금: 건수 기준은 경고·차단 건수 그대로, 사용량 기준은 한도의 비율
+  const scaleOf = (d) => {
+    if (d.limit_mode === 'count') {
+      const max = Math.max(d.block_at_calls + 1, Math.ceil(d.block_at_calls * 1.5));
+      return { count: true, max, cap: d.block_at_calls, marks: [['경고', d.warn_at_calls, ''], ['차단', d.block_at_calls, 'block']] };
+    }
+    const [sr, wr] = ratiosOf(d), L = d.limit_calls;
+    return { count: false, max: L, cap: L, marks: [['의심', L * sr, ''], ['경고', L * wr, ''], ['차단', d.block_at_calls, 'block']] };
+  };
   const activeDiff = (d) => d.credentials.filter((c) => c.status === 'ACTIVE').reduce((a, c) => a + Math.max(c.diff_calls, c.certain_diff_calls || 0), 0);
 
   function renderHome(d) {
@@ -149,17 +162,19 @@
     const inc = st.incident && st.incident.id === d.incident_id ? st.incident : null;
     const val = blocked && inc ? (inc.loss_calls ?? 0) : activeDiff(d);
     tween($('#hNum'), val);
-    const over = val > d.limit_calls; // 최종 손실은 한도를 넘을 수 있다(공격자가 빠르거나 공급자 지연이 클 때)
-    $('#hOf').innerHTML = `/ 한도 ${n(d.limit_calls)}건${over ? ` <span class="badge bad">${n(val - d.limit_calls)}건 초과</span>` : ''}`;
+    const sc = scaleOf(d);
+    const over = val > sc.cap; // 최종 손실은 한도를 넘을 수 있다(공격자가 빠르거나 공급자 지연이 클 때)
+    $('#hOf').innerHTML = `/ ${sc.count ? '차단' : '한도'} ${n(sc.cap)}건${over ? ` <span class="badge bad">${n(val - sc.cap)}건 초과</span>` : ''}`;
     $('#hLabel').innerHTML = blocked ? `${icon('ban', 'width="16" height="16"')}차단까지 새어 나간 호출` : `${icon('alert', 'width="16" height="16"')}게이트웨이가 모르는 호출`;
-    const [sr, wr, br] = ratiosOf(d);
+    const br = ratiosOf(d)[2];
     const meter = $('#meter');
     meter.dataset.level = d.status;
     meter.classList.toggle('over', over);
-    $('.meter-fill', meter).style.width = `${Math.min(100, (val / d.limit_calls) * 100)}%`;
+    $('.meter-fill', meter).style.width = `${Math.min(100, (val / sc.max) * 100)}%`;
     $$('.meter-tick', meter).forEach((x) => x.remove());
-    [[sr, ''], [wr, ''], [br, 'block']].forEach(([r, c]) => meter.insertAdjacentHTML('beforeend', `<span class="meter-tick ${c}" style="left:${r * 100}%"></span>`));
-    $('#meterLegend').innerHTML = `<span style="left:${sr * 100}%">의심 ${n(d.limit_calls * sr)}</span><span style="left:${wr * 100}%">경고 ${n(d.limit_calls * wr)}</span><span style="left:${br * 100}%;color:var(--bad-ink)">차단 ${n(d.block_at_calls)}</span><span class="end" style="left:100%">${n(d.limit_calls)}</span>`;
+    sc.marks.forEach(([, at, c]) => meter.insertAdjacentHTML('beforeend', `<span class="meter-tick ${c}" style="left:${(at / sc.max) * 100}%"></span>`));
+    $('#meterLegend').innerHTML = sc.marks.map(([l, at, c]) => `<span style="left:${(at / sc.max) * 100}%${c ? ';color:var(--bad-ink)' : ''}">${l} ${n(at)}</span>`).join('')
+      + (sc.count ? '' : `<span class="end" style="left:100%">${n(sc.max)}</span>`);
 
     tween($('#kGw'), d.gateway_calls);
     tween($('#kPv'), d.provider_calls);
@@ -169,7 +184,7 @@
     $('#kKey').textContent = a ? a.masked : '없음';
     $('#kKeyS').textContent = a ? `${a.provider} · ${a.auth_mode === 'WIF' ? 'WIF 단기 토큰' : 'API 키'}` : '예비 키가 없어요';
     $('#kBlock').textContent = `${n(d.block_at_calls, 1)}건`;
-    $('#kLimit').textContent = `한도 ${n(d.limit_calls)}건의 ${Math.round(br * 100)}%`;
+    $('#kLimit').textContent = sc.count ? `건수 기준 · ${n(d.warn_at_calls)}건부터 경고` : `한도 ${n(d.limit_calls)}건의 ${Math.round(br * 100)}%`;
     $('#updated').textContent = `${time(d.updated_at)} 기준`;
     $('#attackNote').hidden = !d.attack_running;
 
@@ -185,8 +200,8 @@
     const mode = c.auth_mode === 'WIF' ? 'WIF 단기 토큰' : 'API 키 · Vault 암호화';
     const counts = c.gateway_calls != null ? ` · 게이트웨이 ${n(c.gateway_calls)} / 공급자 ${n(c.provider_calls)}${c.calls_estimated ? '(추정)' : ''}` : '';
     return `<div class="row ${dead ? 'dead' : ''}"><div class="row-ic ${ic}">${icon(c.auth_mode === 'WIF' ? 'id' : 'key')}</div>
-      <div class="row-b"><div class="row-t"><span class="mono">${esc(c.masked)}</span>${c.role === 'PRIMARY' && !dead ? '' : ''}</div>
-      <div class="row-s">${c.role === 'PRIMARY' ? '주 키' : '예비 키'} · ${esc(c.provider)} · ${mode}${counts}</div></div>
+      <div class="row-b"><div class="row-t"><span class="mono">${esc(c.name || c.masked)}</span>${c.name ? `<span class="mono muted" style="font-size:13px;font-weight:400">${esc(c.masked)}</span>` : ''}</div>
+      <div class="row-s">${c.role === 'PRIMARY' ? '주 키' : '예비 키'} · ${esc(c.provider)} · ${mode}${c.limit_usd ? ` · 한도 $${c.limit_usd}` : ''}${counts}</div></div>
       <div class="row-e">${badge}${actions}</div></div>`;
   }
 
@@ -334,63 +349,281 @@
   }
 
   // ================= 키·한도 =================
+  // ================= 키·한도: 키 관리 · 키 만들기 · 한도 =================
+  const KEY_TABS = [['manage', '키 관리'], ['create', '키 만들기'], ['limit', '한도']];
+
   function viewKeys(v) {
+    const sub = KEY_TABS.some(([k]) => k === st.sub) ? st.sub : 'manage';
+    v.innerHTML = `<div class="seg tabs" role="tablist" aria-label="키·한도">${KEY_TABS.map(([k, l]) => `<button role="tab" data-go="keys/${k}" aria-pressed="${k === sub}" aria-selected="${k === sub}">${l}</button>`).join('')}</div><div id="keyView"></div>`;
+    ({ manage: viewKeyManage, create: viewKeyCreate, limit: viewLimit })[sub]($('#keyView', v));
+  }
+
+  // ---------- 키 관리: 지금 있는 키를 보고, 기존 키를 등록하고, 폐기한다 ----------
+  function viewKeyManage(v) {
+    v.innerHTML = `
+      <div class="kpis k4" id="credSum"></div>
+      <div class="card" style="margin-top:var(--gap)">
+        <div class="card-h"><div><h2>공급자 크레덴셜</h2><p>원문은 Vault에 암호화해 저장하고 화면에는 마스킹만 보여요</p></div><div class="spacer"></div>
+          <button class="btn sm gray" id="addCred">${icon('plus')}기존 키 등록</button><button class="btn sm" data-go="keys/create">${icon('key')}새 키 만들기</button></div>
+        <div class="seg" id="credFilter" style="margin-bottom:8px">${[['all', '전체'], ['ACTIVE', '사용 가능'], ['REVOKED', '폐기됨']].map(([k, l]) => `<button data-f="${k}" aria-pressed="${st.credFilter === k}">${l}</button>`).join('')}</div>
+        <div class="list" id="credAll"><div class="empty">불러오는 중…</div></div>
+      </div>`;
+    $('#credFilter').onclick = (e) => {
+      const b = e.target.closest('[data-f]'); if (!b) return;
+      st.credFilter = b.dataset.f;
+      $$('#credFilter button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+      loadCreds();
+    };
+    $('#addCred').onclick = credSheet;
+    loadCreds();
+  }
+
+  // ---------- 키 만들기: 사람·팀 단위로 여러 키를 한 번에 ----------
+  // 설계: NovemberApiGateway docs/multi-key-management-design.md (1:1 > 팀 > 공유 순으로 탐지 신뢰도가 높다)
+  const SPLIT = {
+    person: { label: '사람마다 1개', who: '키를 받을 사람', ph: '이름을 쓰고 Enter (예: 김민지)', tag: '1:1', grade: ['ok', '탐지 신뢰도 높음'], note: '사람별 기준선이 선명해 작은 이상도 잡고, 유출돼도 피해가 한 사람에 그쳐요.' },
+    team: { label: '팀마다 1개', who: '키를 받을 팀', ph: '팀 이름을 쓰고 Enter (예: 결제팀)', tag: '팀', grade: ['warn', '탐지 신뢰도 중간'], note: '팀 평균이 기준선이라 한 사람의 이상은 묻힐 수 있어요.' },
+    shared: { label: '공유 1개', who: '키 이름', ph: '키 이름 (예: 사내-공용)', tag: '공유', grade: ['bad', '탐지 신뢰도 낮음'], note: '누가 썼는지 알 수 없고, 유출되면 모두가 영향을 받아요.' },
+  };
+  const kb = { provider: 'openrouter', split: 'person', names: [], spare: 1, limit: 0.5, primary: true, running: false };
+
+  function viewKeyCreate(v) {
     v.innerHTML = `
       <section class="grid g-main">
         <div class="card">
-          <div class="card-h"><div><h2>허용 무단 호출 수</h2><p>게이트웨이가 모르는 호출을 몇 건까지 참을지 정해요. 판정의 기준이에요.</p></div></div>
-          <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">
-            <div class="stepper"><button id="limDown" aria-label="줄이기">−</button><input id="limIn" class="num" inputmode="numeric" aria-label="허용 무단 호출 수"><button id="limUp" aria-label="늘리기">+</button></div>
-            <div class="inline-form">${[30, 50, 100, 200].map((x) => `<button class="chip" data-lim="${x}">${x}건</button>`).join('')}</div>
+          <div class="card-h"><div><h2>새 키 만들기</h2><p>공급자 관리 키로 november- 접두 키를 한 번에 여러 개 만들어요</p></div></div>
+          <div class="field"><span>공급자</span><div class="seg full" id="kbProv">${[['openrouter', 'OpenRouter'], ['openai', 'OpenAI']].map(([k, l]) => `<button data-p="${k}" aria-pressed="${kb.provider === k}">${l}</button>`).join('')}</div>
+            <small id="kbProvNote"></small></div>
+          <div class="field"><span>나누는 방식</span>
+            <div class="opts" id="kbSplit" role="radiogroup">${Object.entries(SPLIT).map(([k, s]) => `<button class="opt" role="radio" data-s="${k}" aria-checked="${kb.split === k}">
+              <b>${s.label}${k === 'person' ? ' <span class="badge blue">권장</span>' : ''}</b><span class="badge ${s.grade[0]}">${s.grade[1]}</span><small>${s.note}</small></button>`).join('')}</div></div>
+          <div class="field"><span id="kbWho"></span>
+            <div class="tag-input" id="kbNames"><input id="kbNameIn" aria-label="이름 추가" autocomplete="off"></div>
+            <small id="kbNameNote"></small></div>
+          <div class="g-2 grid" style="gap:16px">
+            <div class="field" style="margin:0"><span>예비 키</span>
+              <div class="stepper sm"><button id="kbSpDown" aria-label="예비 키 줄이기">−</button><input id="kbSpare" class="num" inputmode="numeric" aria-label="예비 키 수"><button id="kbSpUp" aria-label="예비 키 늘리기">+</button></div>
+              <small>유출로 차단되면 순서대로 이어받아요</small></div>
+            <div class="field" style="margin:0"><span>키당 지출 한도 (USD)</span>
+              <input class="input num" id="kbLimit" inputmode="decimal">
+              <small id="kbLimitNote"></small></div>
           </div>
-          <div class="kpis k3" style="margin-top:20px" id="limPreview"></div>
-          <div class="callout info" style="margin-top:var(--gap)">${icon('bell')}<span>차단선을 한도의 70%에 두는 이유: 공급자 집계 지연(2초)과 폴링(2초) 동안 들어오는 호출을 흡수해서 최종 손실이 한도 아래에 머물게 하려는 거예요.</span></div>
-          <label class="field" style="margin-top:8px"><span>참고 금액 한도 (원, 판정에 쓰지 않아요)</span><input class="input num" id="lossIn" inputmode="numeric"></label>
+          <label class="check-row" style="margin-top:16px"><span class="switch"><input type="checkbox" id="kbPrimary"><span></span></span><span><b>첫 번째 키를 주 키로</b><small id="kbPrimaryNote"></small></span></label>
+        </div>
+        <div class="card kb-preview">
+          <div class="card-h"><div><h2 id="kbCountT">만들어질 키</h2><p id="kbCountS"></p></div></div>
+          <div class="list" id="kbRows"></div>
+          <div class="kb-sum" id="kbSum"></div>
+          <button class="btn block lg" id="kbGo" style="margin-top:16px"></button>
+          <div class="callout info" style="margin:12px 0 0">${icon('swap')}<span>지금 게이트웨이는 주 키 하나로 중계하고, 나머지는 예비 키로 대기하다가 차단 때 이어받아요. 사람별 중계는 다중 키 설계의 다음 단계예요.</span></div>
+        </div>
+      </section>`;
+    const activePrimary = () => st.creds && st.creds.find((c) => c.role === 'PRIMARY' && c.status === 'ACTIVE');
+    const plan = () => {
+      const s = SPLIT[kb.split];
+      const names = kb.split === 'shared' ? kb.names.slice(0, 1) : kb.names;
+      const rows = [...names.map((nm) => ({ name: nm, tag: s.tag })), ...Array.from({ length: kb.spare }, (_, i) => ({ name: `예비-${i + 1}`, tag: '예비 풀' }))];
+      const canPrimary = !activePrimary();
+      return rows.map((r, i) => ({ ...r, role: kb.primary && canPrimary && i === 0 && r.tag !== '예비 풀' ? 'PRIMARY' : 'STANDBY' }));
+    };
+    const slug = (s) => s.trim().replace(/\s+/g, '-').slice(0, 32);
+    const draw = () => {
+      const s = SPLIT[kb.split], p = activePrimary();
+      $('#kbProvNote').textContent = kb.provider === 'openrouter' ? '사용액 약 6초 지연 · 폐기 약 20초. 키마다 지출 한도를 걸 수 있어요' : '호출 수 약 6분 지연 · 폐기 약 3초. 지출 한도는 공급자 대시보드에서 정해요';
+      $('#kbWho').textContent = s.who;
+      $('#kbNameIn').placeholder = kb.split === 'shared' && kb.names.length ? '' : s.ph;
+      $('#kbNameIn').disabled = kb.split === 'shared' && kb.names.length >= 1;
+      $$('#kbNames .tag').forEach((x) => x.remove());
+      (kb.split === 'shared' ? kb.names.slice(0, 1) : kb.names).forEach((nm, i) => $('#kbNameIn').insertAdjacentHTML('beforebegin', `<span class="tag">${esc(nm)}<button data-rm="${i}" aria-label="${esc(nm)} 빼기">${icon('x')}</button></span>`));
+      $('#kbNameNote').textContent = kb.split === 'shared' ? '공유 키는 하나만 만들어요' : `${kb.names.length}명 · 붙여 넣으면 쉼표나 줄바꿈으로 나눠요`;
+      if (kb.split === 'team') $('#kbNameNote').textContent = `${kb.names.length}팀 · 붙여 넣으면 쉼표나 줄바꿈으로 나눠요`;
+      $('#kbSpare').value = kb.spare;
+      $('#kbLimit').value = kb.limit;
+      $('#kbLimit').disabled = kb.provider === 'openai';
+      $('#kbLimitNote').textContent = kb.provider === 'openai' ? 'OpenAI는 키별 한도를 API로 걸 수 없어요' : '공급자 쪽 보조 안전장치예요. 탐지가 늦어도 손실이 여기서 끊겨요';
+      $('#kbPrimary').checked = kb.primary && !p; $('#kbPrimary').disabled = !!p;
+      $('#kbPrimaryNote').textContent = p ? `이미 주 키(${p.masked})가 있어요. 새 키는 모두 예비 키로 만들어요` : '공격자 화면이 이 키를 ‘유출된 키’로 써요. 원문은 한 번만 보여 드려요';
+      const rows = plan();
+      $('#kbCountT').textContent = rows.length ? `만들어질 키 ${rows.length}개` : '만들어질 키';
+      $('#kbCountS').textContent = rows.length ? `${kb.provider === 'openrouter' ? 'OpenRouter' : 'OpenAI'} · ${s.label}` : '왼쪽에서 이름을 추가하면 여기에 쌓여요';
+      $('#kbRows').innerHTML = rows.map((r, i) => `<div class="row" data-i="${i}"><div class="row-ic ${r.role === 'PRIMARY' ? '' : 'ok'}">${icon('key')}</div>
+        <div class="row-b"><div class="row-t"><span class="mono">november-${esc(slug(r.name))}</span></div><div class="row-s">${r.role === 'PRIMARY' ? '주 키' : '예비 키'} · ${r.tag}${kb.provider === 'openrouter' ? ` · 한도 $${kb.limit}` : ''}</div></div>
+        <div class="row-e"><span class="badge ghost kb-st">대기</span></div></div>`).join('')
+        || `<div class="empty">${icon('key')}아직 만들 키가 없어요</div>`;
+      const active = (st.creds || []).filter((c) => c.status === 'ACTIVE').length;
+      const after = active + rows.length;
+      $('#kbSum').innerHTML = rows.length ? `
+        <div><span>공급자 지출 한도 합계</span><b class="num">${kb.provider === 'openrouter' ? `$${(Math.round(rows.length * kb.limit * 100) / 100).toFixed(2)}` : '—'}</b></div>
+        <div><span>관리 키 ${n(active)}개 → ${n(after)}개</span><b class="num">월 ${won(100000 + after * 10000)}</b></div>
+        <small>요금은 설계 단계 가정이에요: 기본 10만원 + 키당 1만원</small>` : '';
+      const go = $('#kbGo');
+      go.disabled = !rows.length || kb.running;
+      go.textContent = kb.running ? '만드는 중…' : rows.length ? `키 ${rows.length}개 만들기` : '이름을 먼저 추가하세요';
+    };
+    const addNames = (raw) => {
+      const add = raw.split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
+      for (const a of add) if (!kb.names.includes(a)) kb.names.push(a);
+      draw();
+    };
+    const nameIn = $('#kbNameIn');
+    nameIn.onkeydown = (e) => {
+      if ((e.key === 'Enter' || e.key === ',') && !e.isComposing) { e.preventDefault(); if (nameIn.value.trim()) { addNames(nameIn.value); nameIn.value = ''; } }
+      if (e.key === 'Backspace' && !nameIn.value && kb.names.length) { kb.names.pop(); draw(); }
+    };
+    nameIn.onpaste = (e) => { const t = e.clipboardData.getData('text'); if (/[,\n]/.test(t)) { e.preventDefault(); addNames(t); } };
+    nameIn.onblur = () => { if (nameIn.value.trim()) { addNames(nameIn.value); nameIn.value = ''; } };
+    $('#kbNames').onclick = (e) => { const b = e.target.closest('[data-rm]'); if (b) { kb.names.splice(+b.dataset.rm, 1); draw(); } else nameIn.focus(); };
+    $('#kbProv').onclick = (e) => { const b = e.target.closest('[data-p]'); if (!b) return; kb.provider = b.dataset.p; $$('#kbProv button').forEach((x) => x.setAttribute('aria-pressed', x === b)); draw(); };
+    $('#kbSplit').onclick = (e) => { const b = e.target.closest('[data-s]'); if (!b) return; kb.split = b.dataset.s; $$('#kbSplit .opt').forEach((x) => x.setAttribute('aria-checked', x === b)); draw(); };
+    $('#kbSpDown').onclick = () => { kb.spare = Math.max(0, kb.spare - 1); draw(); };
+    $('#kbSpUp').onclick = () => { kb.spare = Math.min(5, kb.spare + 1); draw(); };
+    $('#kbSpare').onchange = (e) => { kb.spare = Math.min(5, Math.max(0, parseInt(e.target.value, 10) || 0)); draw(); };
+    $('#kbLimit').onchange = (e) => { const x = parseFloat(e.target.value); kb.limit = x > 0 ? Math.round(x * 100) / 100 : 0.5; draw(); };
+    $('#kbPrimary').onchange = (e) => { kb.primary = e.target.checked; draw(); };
+    $('#kbGo').onclick = async () => {
+      const rows = plan();
+      if (API.mode === 'live' && !await confirmSheet({ title: `실제 ${kb.provider === 'openrouter' ? 'OpenRouter' : 'OpenAI'} 키 ${rows.length}개를 만들까요?`, desc: kb.provider === 'openrouter' ? `키마다 $${kb.limit} 지출 한도를 걸어요. 시연 후 데모 제어 → ‘실제 키 정리’로 지울 수 있어요.` : '시연 후 데모 제어 → ‘실제 키 정리’로 지울 수 있어요.', ok: '만들기' })) return;
+      kb.running = true; draw();
+      let ok = 0, leaked = null;
+      for (const [i, r] of rows.entries()) {
+        const rowEl = $(`#kbRows [data-i="${i}"]`), badge = rowEl && $('.kb-st', rowEl);
+        if (badge) { badge.className = 'badge blue kb-st'; badge.textContent = '만드는 중'; }
+        try {
+          const res = await API.provision(kb.provider, { role: r.role, name: slug(r.name), ...(kb.provider === 'openrouter' ? { limit_usd: kb.limit } : {}) });
+          ok++; if (res.leaked_key) leaked = res.leaked_key;
+          if (badge) { badge.className = 'badge ok kb-st'; badge.textContent = `완료 ${res.masked}`; }
+        } catch (e) {
+          if (badge) { badge.className = 'badge bad kb-st'; badge.textContent = '실패'; badge.title = e.message; }
+          if (rowEl) $('.row-s', rowEl).textContent = e.message;
+        }
+      }
+      kb.running = false;
+      st.creds = await API.credentials().catch(() => st.creds);
+      if (ok) { kb.names = []; }
+      toast(ok === rows.length ? `키 ${ok}개를 만들었어요` : `${rows.length}개 중 ${ok}개를 만들었어요`, ok === rows.length ? 'ok' : 'warn');
+      const go = $('#kbGo');
+      if (go) { go.disabled = false; go.textContent = '키 관리에서 보기'; go.onclick = () => { location.hash = 'keys/manage'; }; }
+      if (leaked) secretSheet('주 키를 만들었어요', '공격자 화면에서 ‘유출된 키’로 쓰여요. 지금 한 번만 보여 드려요.', leaked);
+    };
+    draw();
+    API.credentials().then((list) => { st.creds = list; if ($('#kbRows')) draw(); }).catch(() => {});
+  }
+
+  // ---------- 한도: 건수 기준 / 사용량(%) 기준 ----------
+  function viewLimit(v) {
+    v.innerHTML = `
+      <section class="grid g-main">
+        <div class="card">
+          <div class="card-h"><div><h2>판정 기준</h2><p>게이트웨이가 모르는 호출을 어떤 기준으로 경고하고 차단할지 정해요</p></div></div>
+          <div class="opts two" id="lmMode" role="radiogroup">
+            <button class="opt" role="radio" data-m="count"><b>건수</b><span class="badge ghost lm-now" hidden>적용 중</span><small>모르는 호출이 1건, 2건처럼 정한 수에 닿는 순간 경고·차단해요. 오차를 빼지 않아요.</small></button>
+            <button class="opt" role="radio" data-m="ratio"><b>사용량 (%)</b><span class="badge ghost lm-now" hidden>적용 중</span><small>허용 무단 호출 수(한도)의 10% 의심 · 50% 경고 · 70% 차단. 공급자 지연을 흡수해요.</small></button>
+          </div>
+
+          <div id="lmCount" class="lm-panel">
+            <div class="g-2 grid" style="gap:16px">
+              <div class="field" style="margin:0"><span>경고</span><div class="stepper"><button data-step="cw:-1" aria-label="경고 줄이기">−</button><input id="cwIn" class="num" inputmode="numeric" aria-label="경고 건수"><button data-step="cw:1" aria-label="경고 늘리기">+</button></div></div>
+              <div class="field" style="margin:0"><span>자동 차단</span><div class="stepper"><button data-step="cb:-1" aria-label="차단 줄이기">−</button><input id="cbIn" class="num" inputmode="numeric" aria-label="차단 건수"><button data-step="cb:1" aria-label="차단 늘리기">+</button></div></div>
+            </div>
+            <div class="inline-form" style="margin-top:12px">${[[1, 2], [2, 3], [3, 5]].map(([w, b]) => `<button class="chip" data-cp="${w},${b}">${w}건 경고 · ${b}건 차단</button>`).join('')}</div>
+            <div class="calls-strip" id="cStrip" aria-label="건수 기준 미리보기"></div>
+          </div>
+
+          <div id="lmRatio" class="lm-panel">
+            <div class="field" style="margin:0"><span>허용 무단 호출 수 (한도)</span>
+              <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+                <div class="stepper"><button id="limDown" aria-label="줄이기">−</button><input id="limIn" class="num" inputmode="numeric" aria-label="허용 무단 호출 수"><button id="limUp" aria-label="늘리기">+</button></div>
+                <div class="inline-form">${[30, 50, 100, 200].map((x) => `<button class="chip" data-lim="${x}">${x}건</button>`).join('')}</div>
+              </div></div>
+            <div class="kpis k3" style="margin-top:20px" id="limPreview"></div>
+          </div>
+
+          <div class="callout" id="lmUnsupported" hidden>${icon('alert')}<span>연결된 서버가 아직 건수 기준을 모르는 버전이에요. 서버 판정은 사용량(%) 기준 그대로라 건수 기준은 저장할 수 없어요. 백엔드에 건수 기준 패치가 들어가면 바로 쓸 수 있어요.</span></div>
+          <label class="field" style="margin-top:20px"><span>참고 금액 한도 (원, 판정에 쓰지 않아요)</span><input class="input num" id="lossIn" inputmode="numeric"></label>
           <button class="btn block" id="limSave">저장하기</button>
         </div>
         <div class="card">
-          <div class="card-h"><div><h2>실제 공급자 키 만들기</h2><p>OpenRouter · OpenAI 관리 키로 november- 접두 키를 만들어요</p></div></div>
-          <div id="provBox"></div>
+          <div class="card-h"><div><h2>어떤 기준을 쓸까요?</h2></div></div>
+          <div class="list">
+            <div class="row"><div class="row-ic">${icon('target')}</div><div class="row-b"><div class="row-t"><span>건수</span></div><div class="lm-why">사람마다 키를 나눠 쓰면 정상 사용이 전부 게이트웨이를 거쳐요. 모르는 호출은 1건만 나와도 유출 신호라 바로 막는 게 맞아요.</div></div></div>
+            <div class="row"><div class="row-ic">${icon('chart')}</div><div class="row-b"><div class="row-t"><span>사용량 (%)</span></div><div class="lm-why">공급자 집계가 늦거나(OpenAI 약 6분) 여럿이 키를 나눠 쓸 때 맞아요. 차단선을 한도의 70%에 둬서, 지연 동안 들어오는 호출까지 한도 안에서 끊어요.</div></div></div>
+          </div>
         </div>
-      </section>
-      <div class="card" style="margin-top:var(--gap)">
-        <div class="card-h"><div><h2>공급자 크레덴셜</h2><p>원문은 Vault에 암호화해 저장하고 화면에는 마스킹만 보여요</p></div><div class="spacer"></div><button class="btn sm" id="addCred">${icon('plus')}키 등록</button></div>
-        <div class="list" id="credAll"></div>
-      </div>`;
-    let ratios = [0.1, 0.5, 0.7];
-    const preview = () => {
-      const L = +$('#limIn').value || 0;
+      </section>`;
+    const f = { mode: 'ratio', cw: 1, cb: 2, L: 100, loss: 100000, applied: 'ratio', supported: true, touched: false };
+    let ratios = st.dash ? ratiosOf(st.dash) : [0.1, 0.5, 0.7];
+    const draw = () => {
+      $$('#lmMode .opt').forEach((b) => { b.setAttribute('aria-checked', b.dataset.m === f.mode); $('.lm-now', b).hidden = b.dataset.m !== f.applied; });
+      $('#lmCount').hidden = f.mode !== 'count';
+      $('#lmRatio').hidden = f.mode !== 'ratio';
+      $('#cwIn').value = f.cw; $('#cbIn').value = f.cb;
+      const cells = Math.max(f.cb + 1, 4);
+      $('#cStrip').innerHTML = Array.from({ length: cells }, (_, i) => {
+        const k = i + 1, cls = k >= f.cb ? 'bad' : k >= f.cw ? 'warn' : '';
+        return `<div class="cs ${cls}"><b class="num">${k}건</b><span>${k >= f.cb ? (k === f.cb ? '자동 차단' : '') : k >= f.cw ? (k === f.cw ? '경고' : '') : '지켜봄'}</span></div>`;
+      }).join('');
+      $('#limIn').value = f.L;
       $('#limPreview').innerHTML = [['의심', ratios[0], 'warn', 'alert'], ['경고', ratios[1], 'warn', 'bell'], ['자동 차단', ratios[2], 'bad', 'ban']]
-        .map(([l, r, k, ic]) => `<div class="kpi"><div class="kpi-l"><span class="badge ${k}">${icon(ic)}${l}</span></div><div class="kpi-v num">${n(L * r, 1)}건</div><div class="kpi-s">한도의 ${Math.round(r * 100)}%</div></div>`).join('');
+        .map(([l, r, k, ic]) => `<div class="kpi"><div class="kpi-l"><span class="badge ${k}">${icon(ic)}${l}</span></div><div class="kpi-v num">${n(f.L * r, 1)}건</div><div class="kpi-s">한도의 ${Math.round(r * 100)}%</div></div>`).join('');
+      const blocked = f.mode === 'count' && !f.supported;
+      $('#lmUnsupported').hidden = !blocked;
+      $('#limSave').disabled = blocked;
     };
-    API.settings().then((s) => { $('#limIn').value = s.unauthorized_call_limit; $('#lossIn').value = s.loss_limit_krw; if (st.dash) ratios = ratiosOf(st.dash); preview(); });
-    $('#limIn').oninput = preview;
-    $('#limDown').onclick = () => { $('#limIn').value = Math.max(1, (+$('#limIn').value || 0) - 10); preview(); };
-    $('#limUp').onclick = () => { $('#limIn').value = (+$('#limIn').value || 0) + 10; preview(); };
-    $$('[data-lim]').forEach((b) => { b.onclick = () => { $('#limIn').value = b.dataset.lim; preview(); }; });
+    API.settings().then((s) => {
+      f.supported = 'limit_mode' in s; // 건수 기준을 아는 서버만 limit_mode를 돌려준다
+      f.applied = s.limit_mode === 'count' ? 'count' : 'ratio';
+      if (!f.touched) f.mode = f.applied; // 불러오는 사이 먼저 고른 기준은 그대로 둔다
+      f.cw = s.count_warn_calls || 1; f.cb = s.count_block_calls || 2;
+      f.L = s.unauthorized_call_limit; f.loss = s.loss_limit_krw;
+      $('#lossIn').value = f.loss;
+      draw();
+    }).catch((e) => toast(e.message, 'bad'));
+    $('#lmMode').onclick = (e) => { const b = e.target.closest('[data-m]'); if (b) { f.mode = b.dataset.m; f.touched = true; draw(); } };
+    $$('[data-step]', v).forEach((b) => { b.onclick = () => {
+      const [k, d] = b.dataset.step.split(':');
+      f[k] = Math.max(1, f[k] + +d);
+      if (k === 'cw' && f.cb < f.cw) f.cb = f.cw;
+      if (k === 'cb' && f.cw > f.cb) f.cw = f.cb;
+      draw();
+    }; });
+    $('#cwIn').onchange = (e) => { f.cw = Math.max(1, parseInt(e.target.value, 10) || 1); if (f.cb < f.cw) f.cb = f.cw; draw(); };
+    $('#cbIn').onchange = (e) => { f.cb = Math.max(1, parseInt(e.target.value, 10) || 1); if (f.cw > f.cb) f.cw = f.cb; draw(); };
+    $$('[data-cp]', v).forEach((b) => { b.onclick = () => { [f.cw, f.cb] = b.dataset.cp.split(',').map(Number); draw(); }; });
+    $('#limIn').oninput = (e) => { f.L = Math.max(1, parseInt(e.target.value, 10) || 0); $('#limPreview') && draw(); };
+    $('#limDown').onclick = () => { f.L = Math.max(1, f.L - 10); draw(); };
+    $('#limUp').onclick = () => { f.L += 10; draw(); };
+    $$('[data-lim]', v).forEach((b) => { b.onclick = () => { f.L = +b.dataset.lim; draw(); }; });
     $('#limSave').onclick = async () => {
-      const L = parseInt($('#limIn').value, 10), K = parseInt($('#lossIn').value.replace(/\D/g, ''), 10);
-      try { await API.saveSettings({ unauthorized_call_limit: L, loss_limit_krw: K }); toast(`한도를 ${n(L)}건으로 바꿨어요. 다음 판정(2초 안)부터 적용돼요`, 'ok'); }
-      catch (e) { toast(e.message, 'bad'); }
+      const K = parseInt($('#lossIn').value.replace(/\D/g, ''), 10);
+      const body = { unauthorized_call_limit: f.L, loss_limit_krw: K };
+      if (f.supported) Object.assign(body, { limit_mode: f.mode, count_warn_calls: f.cw, count_block_calls: f.cb });
+      try {
+        await API.saveSettings(body);
+        f.applied = f.mode; draw();
+        toast(f.mode === 'count' ? `건수 기준: ${n(f.cw)}건 경고 · ${n(f.cb)}건 차단. 다음 판정(2초 안)부터 적용돼요` : `사용량 기준: 한도 ${n(f.L)}건. 다음 판정(2초 안)부터 적용돼요`, 'ok');
+      } catch (e) { toast(e.message, 'bad'); }
     };
-    $('#addCred').onclick = credSheet;
-    $('#provBox').innerHTML = `<div class="list">${['openrouter', 'openai'].map((p) => `<div class="row"><div class="row-ic">${icon('plug')}</div><div class="row-b"><div class="row-t"><span>${p === 'openrouter' ? 'OpenRouter' : 'OpenAI'}</span></div><div class="row-s">${p === 'openrouter' ? '사용액 약 6초 지연 · 폐기 약 20초' : '호출 수 약 6분 지연 · 폐기 약 3초'}</div></div><div class="row-e"><button class="btn sm soft" data-prov="${p}" data-role="STANDBY">예비</button><button class="btn sm" data-prov="${p}" data-role="PRIMARY">주 키</button></div></div>`).join('')}</div>
-      ${API.mode === 'live'
-        ? '<p class="muted" style="font-size:12px;margin:10px 0 0">게이트웨이 .env에 OPENROUTER_MANAGEMENT_KEY 또는 OPENAI_ADMIN_KEY가 있어야 해요.</p>'
-        : `<div class="callout" style="margin-bottom:0">${icon('plug')}<span>시뮬레이션에서는 실제 키를 만들지 않아요. 실서버에 연결하면 POST /admin/{provider}/provision을 불러요.</span></div>`}`;
-    $$('[data-prov]').forEach((b) => { b.onclick = () => provision(b.dataset.prov, b.dataset.role); });
-    loadCreds();
   }
 
   async function loadCreds() {
     try {
-      const list = await API.credentials();
+      const all = await API.credentials();
+      st.creds = all;
       const counts = Object.fromEntries((st.dash ? st.dash.credentials : []).map((c) => [c.id, c]));
       const host = $('#credAll');
       if (!host) return;
+      const live = all.filter((c) => c.status === 'ACTIVE'), p = live.find((c) => c.role === 'PRIMARY');
+      const sum = $('#credSum');
+      if (sum) sum.innerHTML = [
+        ['사용 가능한 키', `${n(live.length)}개`, `공급자 ${[...new Set(live.map((c) => c.provider))].join(' · ') || '—'}`],
+        ['주 키', p ? p.masked : '없음', p ? (p.name || `${p.provider} · 게이트웨이가 이 키로 중계`) : '예비 키를 승격하거나 새로 만드세요'],
+        ['예비 키', `${n(live.length - (p ? 1 : 0))}개`, '차단되면 오래된 순서로 이어받아요'],
+        ['폐기된 키', `${n(all.length - live.length)}개`, '유출 차단·수동 폐기'],
+      ].map(([l, val, s2], i) => `<div class="kpi"><div class="kpi-l">${l}</div><div class="kpi-v ${i === 1 ? 'sm mono' : 'num'}">${esc(val)}</div><div class="kpi-s">${esc(s2)}</div></div>`).join('');
+      const list = all.filter((c) => st.credFilter === 'all' || c.status === st.credFilter);
       host.innerHTML = list.map((c) => credRow({ ...c, ...(counts[c.id] ? { gateway_calls: counts[c.id].gateway_calls, provider_calls: counts[c.id].provider_calls, calls_estimated: counts[c.id].calls_estimated } : {}) },
         c.status === 'ACTIVE' ? `<button class="icon-btn" data-revoke="${c.id}" aria-label="폐기">${icon('trash')}</button>` : '')).join('')
-        || `<div class="empty">${icon('key')}등록된 키가 없어요</div>`;
+        || `<div class="empty">${icon('key')}${st.credFilter === 'REVOKED' ? '폐기된 키가 없어요' : '등록된 키가 없어요'}</div>`;
       $$('[data-revoke]', host).forEach((b) => {
         b.onclick = async () => {
           if (!await confirmSheet({ title: '이 키를 폐기할까요?', desc: '게이트웨이에서 REVOKED로 표시만 해요. 공급자 쪽 폐기는 하지 않아요.', ok: '폐기', danger: true })) return;
@@ -418,16 +651,6 @@
         };
       },
     });
-  }
-
-  async function provision(provider, role) {
-    try {
-      toast(`${provider} 키를 만드는 중이에요…`, 'info');
-      const r = await API.provision(provider, { role, limit_usd: 0.5 });
-      loadCreds();
-      if (r.leaked_key) secretSheet('주 키를 만들었어요', '공격자 화면에서 ‘유출된 키’로 쓰여요. 지금 한 번만 보여 드려요.', r.leaked_key);
-      else toast(`${r.masked} 예비 키를 만들었어요`, 'ok');
-    } catch (e) { toast(e.message, 'bad'); }
   }
 
   function secretSheet(title, desc, value) {

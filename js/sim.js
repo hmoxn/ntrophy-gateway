@@ -29,11 +29,22 @@
     constructor(status, body) { super(`${status}`); this.status = status; this.body = body; }
   }
 
-  function judge(diff, limit) {
-    const r = diff / limit;
-    if (r >= RATIOS[2]) return 'BREACH';
-    if (r >= RATIOS[1]) return 'WARNING';
-    if (r >= RATIOS[0]) return 'SUSPECT';
+  // 판정 기준 두 가지
+  //   ratio(사용량 %): 한도 L의 10% 의심 / 50% 경고 / 70% 차단, 허용 오차 TOL 차감 (원본 그대로)
+  //   count(건수):     모르는 호출이 경고 N건 / 차단 M건에 닿으면 바로. 1~2건도 잡도록 허용 오차 없이 센다
+  function ruleOf(st) {
+    if (st.limit_mode === 'count') {
+      const w = st.count_warn_calls, b = st.count_block_calls;
+      return { mode: 'count', tol: 0, suspectAt: Math.min(1, w), warnAt: w, blockAt: b, limit: b };
+    }
+    const L = st.unauthorized_call_limit;
+    return { mode: 'ratio', tol: TOL, suspectAt: L * RATIOS[0], warnAt: L * RATIOS[1], blockAt: L * RATIOS[2], limit: L };
+  }
+
+  function judge(diff, r) {
+    if (diff >= r.blockAt) return 'BREACH';
+    if (diff >= r.warnAt) return 'WARNING';
+    if (diff >= r.suspectAt && diff > 0) return 'SUSPECT';
     return 'NORMAL';
   }
 
@@ -79,7 +90,7 @@
       seq = { cred: 0, svc: 0, tok: 0, cidr: 0, event: 0, inc: 0, hk: 0, ti: 0, denied: 0 };
       const t = iso(now());
       S = {
-        settings: { unauthorized_call_limit: 100, loss_limit_krw: 100000 },
+        settings: { limit_mode: 'ratio', unauthorized_call_limit: 100, count_warn_calls: 1, count_block_calls: 2, loss_limit_krw: 100000 },
         budget: null, wifAudience: 'november-gateway',
         creds: [], services: [], tokens: [], cidrs: [], usage: [], snaps: [], denied: [], incidents: [], events: [],
         honeykeys: [], hkEvents: [], blockedIps: {}, trusted: [], jwts: {},
@@ -204,22 +215,23 @@
     function tick() {
       const t = now();
       S.updatedAt = t;
-      const lim = S.settings.unauthorized_call_limit;
+      const rule = ruleOf(S.settings), lim = rule.limit;
+      const limText = rule.mode === 'count' ? `차단 ${rule.blockAt}건` : `한도 ${lim}건`;
       for (const cred of S.creds.filter((c) => c.status === 'ACTIVE')) {
         const u = provider.usage(cred.ref, t);
         S.snaps.push({ credential_id: cred.id, at: t, requests: u.requests, cost_krw: u.cost_krw });
         const gc = gwCount(cred.id, t - LAG_S);
-        const diff = Math.max(0, u.requests - gc - TOL);
-        const certain = Math.max(0, u.requests - gwCount(cred.id) - TOL);
+        const diff = Math.max(0, u.requests - gc - rule.tol);
+        const certain = Math.max(0, u.requests - gwCount(cred.id) - rule.tol);
         S.view[cred.id] = { gateway_calls: gc, provider_calls: u.requests, diff_calls: diff, certain_diff_calls: certain, calls_estimated: false };
         const d = Math.max(diff, certain);
-        const level = judge(d, lim);
+        const level = judge(d, rule);
         const j = (S.judged[cred.id] ||= { level: 'NORMAL', low: null });
         if (ORDER.indexOf(level) > ORDER.indexOf(j.level)) { // 상승은 즉시
           j.level = level; j.low = null;
-          if (level === 'SUSPECT') event('SUSPECT', `${cred.masked} 설명되지 않는 호출 ${d}건 (한도 ${lim}건)`, { credential_id: cred.id, diff_calls: d });
+          if (level === 'SUSPECT') event('SUSPECT', `${cred.masked} 설명되지 않는 호출 ${d}건 (${limText})`, { credential_id: cred.id, diff_calls: d });
           if (level === 'WARNING') event('WARNING', `${cred.masked} 경고: 설명되지 않는 호출 ${d}건`, { credential_id: cred.id, diff_calls: d });
-          if (level === 'BREACH') respond(cred, d, lim);
+          if (level === 'BREACH') respond(cred, d, lim, rule.blockAt);
         } else if (level !== j.level) { // 하강은 HYST_S 동안 유지될 때만
           j.low ??= t;
           if (t - j.low >= HYST_S) { j.level = level; j.low = null; }
@@ -229,7 +241,7 @@
       }
     }
 
-    function respond(cred, diff, lim) {
+    function respond(cred, diff, lim, blockAt) {
       const t = now();
       provider.revoked.add(cred.ref);
       cred.status = 'REVOKED';
@@ -242,7 +254,7 @@
         loss_calls: diff, limit_calls: lim, loss_krw: Math.max(0, provider.usage(cred.ref, t).cost_krw - gwCost(cred.id)), limit_krw: limKrw,
         new_credential_id: sb ? sb.id : null,
         timeline: [
-          { at: iso(t), step: 'DETECTED', ok: true, detail: `설명되지 않는 호출 ${diff}건 ≥ 차단선 ${lim * RATIOS[2]}건` },
+          { at: iso(t), step: 'DETECTED', ok: true, detail: `설명되지 않는 호출 ${diff}건 ≥ 차단선 ${blockAt}건` },
           { at: iso(t), step: 'REVOKE_PROVIDER_KEY', ok: true, detail: `${cred.masked} 공급자에서 폐기` },
         ],
       };
@@ -289,7 +301,7 @@
 
     // ---------- 조회 ----------
     function dashboard() {
-      const lim = S.settings.unauthorized_call_limit, limKrw = S.settings.loss_limit_krw;
+      const rule = ruleOf(S.settings), limKrw = S.settings.loss_limit_krw;
       let worst = 'NORMAL';
       const tot = { g: 0, p: 0, gc: 0, pc: 0, dc: 0, cc: 0 };
       const rows = S.creds.map((c) => {
@@ -315,7 +327,7 @@
         status, limit_krw: limKrw, warn_at_krw: limKrw * RATIOS[1], block_at_krw: limKrw * RATIOS[2],
         diff_krw: Math.max(0, tot.p - tot.g - 5000), diff_usd: Math.max(0, tot.p - tot.g) / USD_TO_KRW,
         gateway_cost_krw: tot.g, provider_cost_krw: tot.p,
-        limit_calls: lim, warn_at_calls: lim * RATIOS[1], block_at_calls: lim * RATIOS[2],
+        limit_mode: rule.mode, limit_calls: rule.limit, suspect_at_calls: rule.suspectAt, warn_at_calls: rule.warnAt, block_at_calls: rule.blockAt,
         diff_calls: tot.dc, certain_diff_calls: tot.cc, gateway_calls: tot.gc, provider_calls: tot.pc,
         active_credential: act ? { id: act.id, provider: act.provider, auth_mode: act.auth_mode, masked: act.masked } : null,
         credentials: rows, attack_running: S.attack,
@@ -463,11 +475,27 @@
         S.creds.push(c); return credOut(c);
       }
       if (method === 'DELETE' && id(/^\/admin\/credentials\/(\d+)$/)) { const c = S.creds.find((x) => x.id === id(/(\d+)$/)); if (c) c.status = 'REVOKED'; return { ok: true }; }
-      if (method === 'POST' && /^\/admin\/(openrouter|openai)\/provision$/.test(p)) throw new HttpError(400, { detail: '시뮬레이션에서는 실제 공급자 키를 만들 수 없어요. 실서버에 연결하세요.' });
+      if (method === 'POST' && /^\/admin\/(openrouter|openai)\/provision$/.test(p)) { // 실서버와 같은 규칙으로 가짜 키를 만든다
+        const prov = p.split('/')[2];
+        need(['PRIMARY', 'STANDBY'].includes(body.role) && (body.limit_usd ?? 0.5) > 0, 400, 'invalid role/limit_usd');
+        need(!(body.role === 'PRIMARY' && primary()), 400, 'active PRIMARY already exists');
+        const raw = `${prov === 'openrouter' ? 'sk-or-v1-' : 'sk-proj-'}${rnd(24)}`;
+        const c = { id: ++seq.cred, provider: prov, auth_mode: 'API_KEY', role: body.role, status: 'ACTIVE', key: raw, masked: mask(raw), audience: null,
+          ref: raw, replaced_by_id: null, created_at: iso(now()), name: `november-${body.name || rnd(6)}`, limit_usd: body.limit_usd ?? 0.5 };
+        S.creds.push(c);
+        return { id: c.id, masked: c.masked, role: c.role, hash_masked: mask(raw), ...(c.role === 'PRIMARY' ? { leaked_key: raw } : {}) };
+      }
 
       if (method === 'GET' && p === '/admin/settings') return { ...S.settings };
       if (method === 'PUT' && p === '/admin/settings') {
-        for (const [k, v] of Object.entries(body)) { need(Number.isInteger(v) && v > 0, 400, `${k} must be > 0`); S.settings[k] = v; }
+        const next = { ...S.settings };
+        for (const [k, v] of Object.entries(body)) {
+          if (k === 'limit_mode') need(['ratio', 'count'].includes(v), 400, 'limit_mode must be ratio|count');
+          else need(Number.isInteger(v) && v > 0, 400, `${k} must be > 0`);
+          next[k] = v;
+        }
+        need(next.count_block_calls >= next.count_warn_calls, 400, 'count_block_calls must be >= count_warn_calls');
+        S.settings = next;
         return { ...S.settings };
       }
       if (method === 'GET' && p === '/admin/cidrs') return S.cidrs.map((c) => ({ ...c }));
@@ -535,7 +563,7 @@
 
     function credOut(c) {
       return { id: c.id, provider: c.provider, auth_mode: c.auth_mode, role: c.role, status: c.status, masked: c.masked, audience: c.audience,
-        provider_ref_masked: mask(c.ref), replaced_by_id: c.replaced_by_id, created_at: c.created_at };
+        provider_ref_masked: mask(c.ref), replaced_by_id: c.replaced_by_id, created_at: c.created_at, name: c.name || null, limit_usd: c.limit_usd ?? null };
     }
 
     let routeResets = 0; // 첫 /demo/reset은 화면이 켜질 때 부르는 것이라 이력을 심는다
