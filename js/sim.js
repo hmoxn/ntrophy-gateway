@@ -71,7 +71,9 @@
       S.events.push({ id: ++seq.event, at: iso(now()), kind, message, data: data || null });
     }
 
-    function reset() {
+    // seed: 오늘 앞 시간대의 정상 사용 이력을 심을지. 페이지를 처음 열 때 한 번만 심고,
+    // '데모 초기화'는 실서버(/demo/reset이 usage_log를 비운다)처럼 호출 수를 0부터 다시 센다
+    function reset(seed) {
       timers.forEach(clearTimeout); timers.clear();
       provider.revoked.clear(); provider.reqs = {};
       seq = { cred: 0, svc: 0, tok: 0, cidr: 0, event: 0, inc: 0, hk: 0, ti: 0, denied: 0 };
@@ -99,7 +101,7 @@
         S.services.push({ id: sid, name, status: 'ACTIVE' });
         tokens[name] = issue(sid).token;
       }
-      seedHistory();
+      if (seed) seedHistory();
       const honeykeys = {};
       for (const planted of ['공개 저장소 .env.example', '사내 위키 설정 예시']) {
         const v = `nvm-honey-${rnd(24)}`;
@@ -502,7 +504,7 @@
       if (method === 'GET' && p === '/admin/usage/budget') return { monthly_budget_krw: S.budget };
       if (method === 'PUT' && p === '/admin/usage/budget') { const b = body.monthly_budget_krw; need(b == null || (Number.isInteger(b) && b > 0), 400, 'invalid'); S.budget = b; return { monthly_budget_krw: b }; }
 
-      if (method === 'POST' && p === '/demo/reset') { attackStop('리셋'); return reset(); }
+      if (method === 'POST' && p === '/demo/reset') { attackStop('리셋'); return reset(routeResets++ === 0); }
       if (method === 'POST' && p === '/demo/attack/start') { attackStart(); return { attack_running: S.attack }; }
       if (method === 'POST' && p === '/demo/attack/stop') { attackStop('공격 수동 종료'); return { attack_running: S.attack }; }
       if (method === 'POST' && p === '/demo/honeypot/hit') {
@@ -535,7 +537,8 @@
         provider_ref_masked: mask(c.ref), replaced_by_id: c.replaced_by_id, created_at: c.created_at };
     }
 
-    reset();
+    let routeResets = 0; // 첫 /demo/reset은 화면이 켜질 때 부르는 것이라 이력을 심는다
+    reset(false);
     setInterval(() => { try { tick(); } catch (e) { console.error(e); } }, POLL_S * 1000);
 
     return {
