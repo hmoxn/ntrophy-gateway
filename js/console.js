@@ -6,11 +6,11 @@
   const { $, $$, esc, icon, n, won, time, ago, toast, sheet, closeSheet, confirmSheet, copy, lineChart, tween } = UI;
 
   const PAGES = [
-    { id: 'home', label: '홈', icon: 'home' },
-    { id: 'usage', label: '사용량', icon: 'chart' },
-    { id: 'keys', label: '키·한도', icon: 'key' },
-    { id: 'access', label: '접근 제어', icon: 'shield' },
-    { id: 'incidents', label: '사고', icon: 'alert' },
+    { id: 'home', label: '홈', icon: 'home', title: '실시간 탐지', sub: '게이트웨이 기록과 공급자 보고를 2초마다 맞춰 봐요' },
+    { id: 'usage', label: '사용량', icon: 'chart', title: '사용량', sub: '게이트웨이가 중계한 호출의 비용과 월말 예측' },
+    { id: 'keys', label: '키·한도', icon: 'key', title: '키·한도', sub: '판정 기준이 되는 허용 무단 호출 수와 공급자 크레덴셜' },
+    { id: 'access', label: '접근 제어', icon: 'shield', title: '접근 제어', sub: '누가, 어디에서 게이트웨이를 부를 수 있는지' },
+    { id: 'incidents', label: '사고', icon: 'alert', title: '사고', sub: '자동 차단 기록과 차단까지 새어 나간 호출 수' },
   ];
 
   const STATUS = {
@@ -59,7 +59,9 @@
     const id = (location.hash.slice(1) || 'home');
     const page = PAGES.find((p) => p.id === id) || PAGES[0];
     st.page = page.id;
-    $('#pageTitle').textContent = page.label;
+    $('#pageTitle').textContent = page.title;
+    $('#pageSub').textContent = page.sub;
+    $('#crumbPage').textContent = page.label;
     renderNav();
     const v = $('#view');
     v.innerHTML = '';
@@ -77,8 +79,8 @@
           <span class="status-pill"><span class="pulse"></span><span id="hPill">정상</span></span>
           <h2 id="hTitle">불러오는 중…</h2>
           <p class="lead" id="hLead">&nbsp;</p>
-          <div class="big-metric"><span class="n num" id="hNum">0</span><span class="u">건</span><span class="of" id="hOf"></span></div>
           <div class="metric-label" id="hLabel">설명되지 않는 호출</div>
+          <div class="big-metric"><span class="n num" id="hNum">0</span><span class="u">건</span><span class="of" id="hOf"></span></div>
           <div class="meter" id="meter"><div class="meter-fill"></div></div>
           <div class="meter-legend" id="meterLegend"></div>
         </div>
@@ -222,8 +224,8 @@
         <span class="muted" style="font-size:13px">게이트웨이가 중계한 호출만 집계해요</span>
       </div>
       <section class="grid g-hero">
-        <div class="card hero" data-status="NORMAL" style="--hero-glow:var(--brand-soft)">
-          <div class="metric-label">${icon('wallet', 'width="16" height="16"')}이번 달 예상 비용</div>
+        <div class="card hero plain">
+          <div class="metric-label" style="margin-top:0">${icon('wallet', 'width="16" height="16"')}이번 달 예상 비용</div>
           <div class="big-metric" style="margin-top:10px"><span class="n num" id="uMonth">0</span><span class="u">원</span></div>
           <p class="lead" id="uRate">&nbsp;</p>
           <div class="kpis" style="margin-top:22px">
