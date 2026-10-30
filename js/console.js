@@ -213,7 +213,7 @@
     host.innerHTML = items.map((e) => {
       const [k, ic] = EVENT[e.kind] || ['gray', 'bell'];
       return `<div class="row"><div class="row-ic sm ${k}">${icon(ic)}</div><div class="row-b"><div class="row-t"><span>${esc(e.message)}</span></div></div><time>${ago(e.at)}</time></div>`;
-    }).join('') || `<div class="empty">${icon('bell')}아직 알림이 없어요<br><span style="font-size:13px">우측 상단 ‘데모 제어’에서 시나리오를 시작해 보세요</span></div>`;
+    }).join('') || `<div class="empty">${icon('bell')}아직 알림이 없어요<br><span style="font-size:13px">왼쪽 아래 ‘데모 제어’에서 시나리오를 시작해 보세요</span></div>`;
   }
 
   // ================= 사용량 =================
@@ -855,9 +855,10 @@
 
   function setConn(ok, err) {
     const chip = $('#connChip');
+    // 점: 실서버에 붙기 전(시뮬레이션·오류)은 빨강, 붙은 뒤는 초록. 글자도 상태를 함께 말한다
     chip.classList.toggle('on', ok && API.mode === 'live');
-    chip.classList.toggle('sim', ok && API.mode === 'sim');
-    $('#connText').textContent = !ok ? (err && err.status === 401 ? '관리자 키 오류' : '연결 끊김') : API.mode === 'live' ? '실서버 연결됨' : '시뮬레이션';
+    chip.classList.remove('sim');
+    $('#connText').textContent = !ok ? (err && err.status === 401 ? '관리자 키 오류' : '실제 API 연결 끊김') : API.mode === 'live' ? '실제 API 연결됨' : '실제 API 연결';
   }
 
   // ================= 시작 =================
@@ -865,6 +866,7 @@
   $('#themeBtn').onclick = () => { UI.toggleTheme(); setThemeIcon(); if (st.page === 'home') refreshChart(); };
   setThemeIcon();
   $('#demoBtn').onclick = demoSheet;
+  $('#demoBtnM').onclick = demoSheet;
   $('#connChip').onclick = connSheet;
 
   (async () => {
