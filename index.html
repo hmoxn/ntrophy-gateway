@@ -5,53 +5,48 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Ntrophy Gateway</title>
 <meta name="description" content="AI API 키 유출을 사용량 대조로 찾아내고 자동으로 차단하는 게이트웨이 관리 콘솔">
-<meta name="theme-color" content="#eef2f5">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="css/app.css?v=6">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 140 146'%3E%3Cpath fill='%232850ED' d='M2 118V69a68 68 0 0 1 136 0v49h-34V69a34 34 0 0 0-68 0v49z'/%3E%3Crect fill='%23EAB432' x='50' y='75' width='40' height='7' rx='1'/%3E%3Cpath fill='%232850ED' d='M40 93h60v8H40zM21 116h98v8H21z'/%3E%3Cpath fill='%232850ED' d='M52 83h6L20 146H1zM88 83h-6l38 63h19z'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#f1f4f7">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/app.css?v=4">
+<link rel="icon" type="image/png" href="assets/logo-mark.png">
 </head>
 <body>
-<!-- 심볼: 터널(게이트웨이)과 그 안으로 들어가는 선로. 터널 입구의 호박색 선이 통과 지점 -->
-<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="ntMark" viewBox="0 0 140 146"><path fill="#2850ED" d="M2 118V69a68 68 0 0 1 136 0v49h-34V69a34 34 0 0 0-68 0v49z"/><rect fill="#EAB432" x="50" y="75" width="40" height="7" rx="1"/><path fill="#2850ED" d="M40 93h60v8H40zM21 116h98v8H21z"/><path fill="#2850ED" d="M52 83h6L20 146H1zM88 83h-6l38 63h19z"/></symbol></svg>
 <div class="app">
   <aside class="side">
     <div class="logo">
-      <svg class="logo-mark" viewBox="0 0 140 146" aria-hidden="true"><use href="#ntMark"/></svg>
-      <div>Ntrophy Gateway<small>키 유출 탐지·자동 차단</small></div>
+      <span class="logo-mark"><img src="assets/logo-mark.png" alt="" width="28" height="28"></span>
+      <div>Ntrophy Gateway<small>AI 키 유출 탐지·자동 차단</small></div>
     </div>
     <nav id="nav" aria-label="주 메뉴"></nav>
     <div class="side-foot">
-      <div class="nav-group">발표 화면</div>
-      <a class="nav-btn" href="live.html" target="_blank" rel="noopener"><span data-ic="users"></span>청중 채팅</a>
-      <a class="nav-btn" href="employee.html" target="_blank" rel="noopener"><span data-ic="user"></span>직원 채팅</a>
-      <button class="btn block demo-side" id="demoBtn"><span data-ic="play"></span>데모 제어</button>
+      <div class="nav-label">시연용 화면</div>
+      <a class="nav-btn" href="live.html" target="_blank" rel="noopener"><span data-ic="users"></span>공격자 채팅<span data-ic="external" class="ext"></span></a>
+      <a class="nav-btn" href="employee.html" target="_blank" rel="noopener"><span data-ic="user"></span>직원 채팅<span data-ic="external" class="ext"></span></a>
     </div>
   </aside>
 
-  <div class="frame-main">
-    <header class="topbar">
-      <div class="crumb"><svg class="logo-mark m-only" viewBox="0 0 140 146" role="img" aria-label="Ntrophy Gateway"><use href="#ntMark"/></svg><span class="ws">데모 워크스페이스</span><span class="sep ws">/</span><b id="crumbPage">홈</b></div>
-      <div class="spacer"></div>
-      <button class="icon-btn" id="themeBtn" aria-label="화면 테마 바꾸기"></button>
-      <button class="btn sm m-only" id="demoBtnM" aria-label="데모 제어"><span data-ic="play"></span></button>
-      <button class="chip conn" id="connChip" title="서버 연결 설정"><span class="led"></span><span id="connText">실제 API 연결</span></button>
-    </header>
-    <main class="main">
-      <div class="wrap">
-        <div class="title-row"><div><h1 id="pageTitle">홈</h1><p id="pageSub"></p></div></div>
-        <div id="banner"></div>
-        <div id="view"></div>
-      </div>
-    </main>
-  </div>
+  <header class="topbar">
+    <span class="top-brand"><span class="logo-mark"><img src="assets/logo-mark.png" alt="" width="28" height="28"></span>Ntrophy</span>
+    <button class="chip" id="connChip" title="서버 연결 설정"><span class="led"></span><span id="connText">연결 확인 중</span></button>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="themeBtn" aria-label="화면 테마 바꾸기"></button>
+    <button class="btn sm" id="demoBtn" aria-label="데모 제어"><span data-ic="play"></span><span class="fab-label">데모 제어</span></button>
+  </header>
+
+  <main class="main">
+    <div class="wrap">
+      <div class="page-head"><h1 id="pageTitle">홈</h1><p id="pageSub"></p></div>
+      <div id="banner"></div>
+      <div id="view"></div>
+    </div>
+  </main>
 </div>
 <nav class="tabbar" id="tabbar" aria-label="하단 메뉴"></nav>
 
-<script src="js/sim.js?v=6"></script>
-<script src="js/api.js?v=6"></script>
-<script src="js/ui.js?v=6"></script>
-<script src="js/console.js?v=6"></script>
+<script src="js/sim.js?v=4"></script>
+<script src="js/api.js?v=4"></script>
+<script src="js/ui.js?v=4"></script>
+<script src="js/console.js?v=4"></script>
 </body>
 </html>

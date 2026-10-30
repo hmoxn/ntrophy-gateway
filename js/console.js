@@ -6,11 +6,11 @@
   const { $, $$, esc, icon, n, won, time, ago, toast, sheet, closeSheet, confirmSheet, copy, lineChart, tween } = UI;
 
   const PAGES = [
-    { id: 'home', label: '홈', icon: 'home', title: '실시간 탐지', sub: '게이트웨이 기록과 공급자 보고를 2초마다 맞춰 봐요' },
-    { id: 'usage', label: '사용량', icon: 'chart', title: '사용량', sub: '게이트웨이가 중계한 호출의 비용과 월말 예측' },
-    { id: 'keys', label: '키·한도', icon: 'key', title: '키·한도', sub: '판정 기준이 되는 허용 무단 호출 수와 공급자 크레덴셜' },
-    { id: 'access', label: '접근 제어', icon: 'shield', title: '접근 제어', sub: '누가, 어디에서 게이트웨이를 부를 수 있는지' },
-    { id: 'incidents', label: '사고', icon: 'alert', title: '사고', sub: '자동 차단 기록과 차단까지 새어 나간 호출 수' },
+    { id: 'home', label: '홈', icon: 'home', sub: '게이트웨이 기록과 공급자 보고를 2초마다 대조해요' },
+    { id: 'usage', label: '사용량', icon: 'chart', sub: '게이트웨이가 중계한 호출의 토큰과 비용' },
+    { id: 'keys', label: '키·한도', icon: 'key', sub: '판정 기준이 되는 한도와 공급자 크레덴셜' },
+    { id: 'access', label: '접근 제어', icon: 'shield', sub: '누가 어디에서 게이트웨이를 부를 수 있는지' },
+    { id: 'incidents', label: '사고', icon: 'alert', sub: '자동 차단과 허니키 탐지가 남긴 기록' },
   ];
 
   const STATUS = {
@@ -22,6 +22,7 @@
   };
   const STEP = {
     DETECTED: '유출 탐지', REVOKE_PROVIDER_KEY: '공급자 키 폐기', PROMOTE_STANDBY: '예비 키 승격',
+    REVOKE_ALL_TOKENS: '전체 토큰 폐기', SUSPEND_SERVICES: '서비스 일시 정지',
     NOTIFY_ADMIN: '관리자 통보', VERIFIED: '전환 키 호출 확인',
   };
   const STEP_ORDER = ['DETECTED', 'REVOKE_PROVIDER_KEY', 'PROMOTE_STANDBY', 'NOTIFY_ADMIN', 'VERIFIED'];
@@ -59,9 +60,8 @@
     const id = (location.hash.slice(1) || 'home');
     const page = PAGES.find((p) => p.id === id) || PAGES[0];
     st.page = page.id;
-    $('#pageTitle').textContent = page.title;
+    $('#pageTitle').textContent = page.label;
     $('#pageSub').textContent = page.sub;
-    $('#crumbPage').textContent = page.label;
     renderNav();
     const v = $('#view');
     v.innerHTML = '';
@@ -79,8 +79,8 @@
           <span class="status-pill"><span class="pulse"></span><span id="hPill">정상</span></span>
           <h2 id="hTitle">불러오는 중…</h2>
           <p class="lead" id="hLead">&nbsp;</p>
-          <div class="metric-label" id="hLabel">설명되지 않는 호출</div>
           <div class="big-metric"><span class="n num" id="hNum">0</span><span class="u">건</span><span class="of" id="hOf"></span></div>
+          <div class="metric-label" id="hLabel">설명되지 않는 호출</div>
           <div class="meter" id="meter"><div class="meter-fill"></div></div>
           <div class="meter-legend" id="meterLegend"></div>
         </div>
@@ -92,11 +92,11 @@
             <div class="kpi"><div class="kpi-l">${icon('key', 'width="14" height="14"')}사용 중인 키</div><div class="kpi-v sm mono" id="kKey">—</div><div class="kpi-s" id="kKeyS">&nbsp;</div></div>
             <div class="kpi"><div class="kpi-l">${icon('target', 'width="14" height="14"')}자동 차단선</div><div class="kpi-v num" id="kBlock">—</div><div class="kpi-s" id="kLimit">&nbsp;</div></div>
           </div>
-          <div class="callout" id="attackNote" hidden>${icon('bolt')}<span>공격 시뮬레이터가 유출 키로 공급자를 직접 호출하고 있어요 (게이트웨이 우회)</span></div>
+          <div class="callout" id="attackNote" hidden>${icon('bolt')}<span>공격자가 유출 키로 공급자를 직접 호출하고 있어요 (게이트웨이 우회)</span></div>
         </div>
       </section>
 
-      <section class="grid g-main" style="margin-top:16px">
+      <section class="grid g-main" style="margin-top:var(--gap)">
         <div class="stack">
           <div class="card">
             <div class="card-h">
@@ -149,7 +149,7 @@
     const inc = st.incident && st.incident.id === d.incident_id ? st.incident : null;
     const val = blocked && inc ? (inc.loss_calls ?? 0) : activeDiff(d);
     tween($('#hNum'), val);
-    const over = val > d.limit_calls; // 최종 손실은 한도를 넘을 수 있다(청중이 빠르거나 공급자 지연이 클 때)
+    const over = val > d.limit_calls; // 최종 손실은 한도를 넘을 수 있다(공격자가 빠르거나 공급자 지연이 클 때)
     $('#hOf').innerHTML = `/ 한도 ${n(d.limit_calls)}건${over ? ` <span class="badge bad">${n(val - d.limit_calls)}건 초과</span>` : ''}`;
     $('#hLabel').innerHTML = blocked ? `${icon('ban', 'width="16" height="16"')}차단까지 새어 나간 호출` : `${icon('alert', 'width="16" height="16"')}게이트웨이가 모르는 호출`;
     const [sr, wr, br] = ratiosOf(d);
@@ -213,7 +213,7 @@
     host.innerHTML = items.map((e) => {
       const [k, ic] = EVENT[e.kind] || ['gray', 'bell'];
       return `<div class="row"><div class="row-ic sm ${k}">${icon(ic)}</div><div class="row-b"><div class="row-t"><span>${esc(e.message)}</span></div></div><time>${ago(e.at)}</time></div>`;
-    }).join('') || `<div class="empty">${icon('bell')}아직 알림이 없어요<br><span style="font-size:13px">왼쪽 아래 ‘데모 제어’에서 시나리오를 시작해 보세요</span></div>`;
+    }).join('') || `<div class="empty">${icon('bell')}아직 알림이 없어요<br><span style="font-size:13px">유출 징후가 보이면 여기에 바로 알려 드려요</span></div>`;
   }
 
   // ================= 사용량 =================
@@ -224,8 +224,8 @@
         <span class="muted" style="font-size:13px">게이트웨이가 중계한 호출만 집계해요</span>
       </div>
       <section class="grid g-hero">
-        <div class="card hero plain">
-          <div class="metric-label" style="margin-top:0">${icon('wallet', 'width="16" height="16"')}이번 달 예상 비용</div>
+        <div class="card hero" data-status="NORMAL" style="--hero-glow:var(--brand-soft)">
+          <div class="metric-label">${icon('wallet', 'width="16" height="16"')}이번 달 예상 비용</div>
           <div class="big-metric" style="margin-top:10px"><span class="n num" id="uMonth">0</span><span class="u">원</span></div>
           <p class="lead" id="uRate">&nbsp;</p>
           <div class="kpis" style="margin-top:22px">
@@ -238,12 +238,12 @@
           <div id="budgetBox"></div>
         </div>
       </section>
-      <section class="grid g-4" style="margin-top:16px" id="uKpis"></section>
-      <div class="card" style="margin-top:16px">
+      <section class="kpis k4" style="margin-top:var(--gap)" id="uKpis"></section>
+      <div class="card" style="margin-top:var(--gap)">
         <div class="card-h"><div><h2 id="uTsTitle">시간대별 호출</h2><p>막대에 올리면 서비스별 호출과 비용이 보여요</p></div></div>
         <div class="chart" id="uTs" style="height:200px"></div>
       </div>
-      <section class="grid g-main" style="margin-top:16px">
+      <section class="grid g-main" style="margin-top:var(--gap)">
         <div class="card"><div class="card-h"><div><h2>서비스별 비용</h2><p>누르면 모델별 내역을 볼 수 있어요</p></div></div><div class="bars" id="uBars"></div></div>
         <div class="card"><div class="card-h"><h2>서비스별 월말 예측</h2></div><div class="list" id="uPer"></div><p class="muted" style="font-size:12px;margin:14px 0 0" id="uNote"></p></div>
       </section>`;
@@ -278,15 +278,15 @@
       $('#uKpis').innerHTML = [
         ['호출', `${n(t.calls)}건`, '성공(200)만'], ['입력 토큰', n(t.input_tokens), ''], ['출력 토큰', n(t.output_tokens), ''],
         ['비용', won(t.cost_krw), `단가표 기준 ${won(t.estimated_cost_krw)}`],
-      ].map(([l, val, s]) => `<div class="card tight"><div class="kpi-l">${l}</div><div class="kpi-v num">${val}</div><div class="kpi-s">${s || '&nbsp;'}</div></div>`).join('');
+      ].map(([l, val, s]) => `<div class="kpi"><div class="kpi-l">${l}</div><div class="kpi-v num">${val}</div><div class="kpi-s">${s || '&nbsp;'}</div></div>`).join('');
       const max = Math.max(1, ...sum.services.map((s) => s.cost_krw));
       $('#uBars').innerHTML = sum.services.map((s) => `<div class="bar-row" style="cursor:pointer" data-svc="${s.service_id}">
-        <div class="bl"><span class="row-ic sm">${icon('user')}</span>${esc(s.name || '알 수 없음')}</div><div class="bv num">${won(s.cost_krw)}</div>
+        <div class="bl">${esc(s.name || '알 수 없음')}</div><div class="bv num">${won(s.cost_krw)}</div>
         <div class="bar-track"><div class="bar-fill" style="width:${s.cost_krw / max * 100}%"></div></div>
         <div class="bs">호출 ${n(s.calls)}건 · 토큰 ${n(s.input_tokens + s.output_tokens)} · ${s.models.map((m) => esc(m.model)).join(', ')}</div></div>`).join('')
-        || `<div class="empty">${icon('chart')}이 기간에는 호출이 없어요<br><span style="font-size:13px">데모 제어에서 ‘직원 정상 호출’을 켜 보세요</span></div>`;
+        || `<div class="empty">${icon('chart')}이 기간에는 호출이 없어요<br><span style="font-size:13px">직원이 게이트웨이를 쓰면 여기에 집계돼요</span></div>`;
       $$('#uBars [data-svc]').forEach((el) => { el.onclick = () => modelSheet(sum.services.find((s) => s.service_id === +el.dataset.svc)); });
-      $('#uPer').innerHTML = fc.per_service.map((p) => `<div class="row"><div class="row-ic sm">${icon('user')}</div><div class="row-b"><div class="row-t"><span>${esc(p.name)}</span></div><div class="row-s">${won(p.rate_cost_krw_per_hour)}/시간</div></div><div class="row-e"><b class="num">${won(p.projected_month_cost_krw)}</b></div></div>`).join('')
+      $('#uPer').innerHTML = fc.per_service.map((p) => `<div class="row"><div class="row-b"><div class="row-t"><span>${esc(p.name)}</span></div><div class="row-s">${won(p.rate_cost_krw_per_hour)}/시간</div></div><div class="row-e"><b class="num">${won(p.projected_month_cost_krw)}</b></div></div>`).join('')
         || `<div class="empty" style="padding:16px">최근 1시간 호출이 없어요</div>`;
       $('#uNote').textContent = fc.note;
     } catch (e) { toast(e.message, 'bad'); }
@@ -343,8 +343,8 @@
             <div class="stepper"><button id="limDown" aria-label="줄이기">−</button><input id="limIn" class="num" inputmode="numeric" aria-label="허용 무단 호출 수"><button id="limUp" aria-label="늘리기">+</button></div>
             <div class="inline-form">${[30, 50, 100, 200].map((x) => `<button class="chip" data-lim="${x}">${x}건</button>`).join('')}</div>
           </div>
-          <div class="grid g-3" style="margin-top:20px" id="limPreview"></div>
-          <div class="callout info" style="margin-top:16px">${icon('bell')}<span>차단선을 한도의 70%에 두는 이유: 공급자 집계 지연(2초)과 폴링(2초) 동안 들어오는 호출을 흡수해서 최종 손실이 한도 아래에 머물게 하려는 거예요.</span></div>
+          <div class="kpis k3" style="margin-top:20px" id="limPreview"></div>
+          <div class="callout info" style="margin-top:var(--gap)">${icon('bell')}<span>차단선을 한도의 70%에 두는 이유: 공급자 집계 지연(2초)과 폴링(2초) 동안 들어오는 호출을 흡수해서 최종 손실이 한도 아래에 머물게 하려는 거예요.</span></div>
           <label class="field" style="margin-top:8px"><span>참고 금액 한도 (원, 판정에 쓰지 않아요)</span><input class="input num" id="lossIn" inputmode="numeric"></label>
           <button class="btn block" id="limSave">저장하기</button>
         </div>
@@ -353,7 +353,7 @@
           <div id="provBox"></div>
         </div>
       </section>
-      <div class="card" style="margin-top:16px">
+      <div class="card" style="margin-top:var(--gap)">
         <div class="card-h"><div><h2>공급자 크레덴셜</h2><p>원문은 Vault에 암호화해 저장하고 화면에는 마스킹만 보여요</p></div><div class="spacer"></div><button class="btn sm" id="addCred">${icon('plus')}키 등록</button></div>
         <div class="list" id="credAll"></div>
       </div>`;
@@ -425,7 +425,7 @@
       toast(`${provider} 키를 만드는 중이에요…`, 'info');
       const r = await API.provision(provider, { role, limit_usd: 0.5 });
       loadCreds();
-      if (r.leaked_key) secretSheet('주 키를 만들었어요', '청중 데모에서 “유출된 키”로 쓰여요. 지금 한 번만 보여 드려요.', r.leaked_key);
+      if (r.leaked_key) secretSheet('주 키를 만들었어요', '공격자 화면에서 ‘유출된 키’로 쓰여요. 지금 한 번만 보여 드려요.', r.leaked_key);
       else toast(`${r.masked} 예비 키를 만들었어요`, 'ok');
     } catch (e) { toast(e.message, 'bad'); }
   }
@@ -445,7 +445,7 @@
     v.innerHTML = `
       <section class="grid g-2">
         <div class="card">
-          <div class="card-h"><div><h2>허용 IP 대역</h2><p>여기에 없는 곳에서 온 호출은 403으로 막아요. 0개면 전부 막아요.</p></div></div>
+          <div class="card-h"><div><h2>허용 IP 대역</h2><p>여기에 없는 곳에서 온 호출은 403으로 막아요. 0개면 모두 허용해요.</p></div></div>
           <div class="list" id="cidrList"></div>
           <form class="inline-form" id="cidrForm" style="margin-top:14px">
             <input class="input mono" name="cidr" placeholder="10.20.0.0/16" required aria-label="CIDR">
@@ -458,19 +458,19 @@
           <div class="list" id="svcList"></div>
         </div>
       </section>
-      <section class="grid g-2" style="margin-top:16px">
+      <section class="grid g-2" style="margin-top:var(--gap)">
         <div class="card">
           <div class="card-h"><div><h2>WIF 신뢰 규칙</h2><p>IdP가 서명한 단기 JWT(OIDC)를 서비스에 연결해요</p></div><div class="spacer"></div><button class="btn sm soft" id="tiAdd">${icon('plus')}규칙</button></div>
           <div class="list" id="tiList"></div>
           <p class="muted" style="font-size:12px;margin:12px 0 0" id="wifAud"></p>
         </div>
         <div class="card">
-          <div class="card-h"><div><h2>허니키</h2><p>일부러 흘려 둔 가짜 토큰이에요. 쓰이면 그 IP를 10분간 막아요.</p></div></div>
+          <div class="card-h"><div><h2>허니키</h2><p>일부러 흘려 둔 가짜 토큰이에요. 쓰이면 전체 API 토큰을 즉시 폐기하고 서비스를 일시 정지해요.</p></div></div>
           <div class="list" id="hkList"></div>
           <div id="blockedIps"></div>
         </div>
       </section>
-      <div class="card" style="margin-top:16px">
+      <div class="card" style="margin-top:var(--gap)">
         <div class="card-h"><div><h2>최근 거부 기록</h2><p>막힌 호출의 출발 IP와 이유</p></div><div class="spacer"></div><button class="icon-btn" id="denRefresh" aria-label="새로고침">${icon('refresh')}</button></div>
         <div class="table-wrap"><table class="table"><thead><tr><th>시각</th><th>출발 IP</th><th>이유</th><th>토큰</th><th></th></tr></thead><tbody id="denRows"></tbody></table></div>
       </div>`;
@@ -490,7 +490,7 @@
       const [cidrs, svcs, ti, hk, den, wif] = await Promise.all([API.cidrs(), API.services(), API.trusted(), API.honeykeys(), API.accessDenied(30), API.wifSettings().catch(() => null)]);
       if (st.page !== 'access') return;
       $('#cidrList').innerHTML = cidrs.map((c) => `<div class="row"><div class="row-ic sm ${c.label === 'VPN' ? 'ok' : ''}">${icon(c.label === 'VPN' ? 'lock' : 'globe')}</div><div class="row-b"><div class="row-t"><span class="mono">${esc(c.cidr)}</span></div><div class="row-s">${c.label === 'VPN' ? 'VPN' : '사내망'}</div></div><div class="row-e"><button class="icon-btn" data-dc="${c.id}" aria-label="삭제">${icon('trash')}</button></div></div>`).join('')
-        || `<div class="callout">${icon('alert')}<span>허용 대역이 없어서 모든 호출이 막혀요.</span></div>`;
+        || `<div class="callout">${icon('alert')}<span>허용 대역이 없어서 모든 IP를 허용하고 있어요.</span></div>`;
       $$('[data-dc]').forEach((b) => { b.onclick = async () => { try { await API.deleteCidr(b.dataset.dc); loadAccess(); } catch (e) { toast(e.message, 'bad'); } }; });
 
       $('#svcList').innerHTML = svcs.map((s) => `<div class="row" style="align-items:flex-start"><div class="row-ic ${s.status === 'ACTIVE' ? '' : 'gray'}">${icon('user')}</div>
@@ -503,13 +503,13 @@
 
       const svcName = (id) => (svcs.find((s) => s.id === id) || {}).name || `#${id}`;
       $('#tiList').innerHTML = ti.map((r) => `<div class="row"><div class="row-ic sm">${icon('id')}</div><div class="row-b"><div class="row-t"><span class="mono">${esc(r.subject_pattern)}</span></div><div class="row-s">${esc(r.issuer)} → ${esc(svcName(r.service_id))}</div></div><div class="row-e"><button class="icon-btn" data-dt="${r.id}" aria-label="삭제">${icon('trash')}</button></div></div>`).join('')
-        || `<div class="empty" style="padding:18px">${icon('id')}규칙이 없어요<br><span style="font-size:13px">데모 제어 → ‘WIF로 호출’이 데모 규칙을 만들어요</span></div>`;
+        || `<div class="empty" style="padding:18px">${icon('id')}규칙이 없어요<br><span style="font-size:13px">사내 ID 공급자의 신원을 서비스에 연결하면 여기에 나와요</span></div>`;
       $$('[data-dt]').forEach((b) => { b.onclick = async () => { try { await API.deleteTrusted(b.dataset.dt); loadAccess(); } catch (e) { toast(e.message, 'bad'); } }; });
       $('#wifAud').innerHTML = wif ? `기본 audience <b class="mono">${esc(wif.wif_audience)}</b> <button class="btn sm ghost" style="height:26px;padding:0 8px" id="wifEdit">바꾸기</button>` : '';
       if (wif) $('#wifEdit').onclick = () => wifAudienceSheet(wif.wif_audience);
 
       $('#hkList').innerHTML = hk.map((h) => `<div class="row"><div class="row-ic sm ${h.hits ? 'warn' : 'gray'}">${icon('honey')}</div><div class="row-b"><div class="row-t"><span class="mono">${esc(h.masked)}</span></div><div class="row-s">${esc(h.planted_at)}</div></div><div class="row-e">${h.hits ? `<span class="badge warn">${n(h.hits)}회 사용됨</span>` : '<span class="badge">조용함</span>'}</div></div>`).join('')
-        || `<div class="empty" style="padding:18px">허니키가 없어요. 데모 초기화를 해 보세요</div>`;
+        || `<div class="empty" style="padding:18px">허니키가 아직 없어요</div>`;
       const bl = st.dash ? st.dash.blocked_ips : [];
       $('#blockedIps').innerHTML = bl.length ? `<div class="callout" style="margin-top:14px">${icon('ban')}<span>임시 차단 중: ${bl.map((b) => `<b class="mono">${esc(b.source_ip)}</b> (${time(b.until, false)}까지)`).join(', ')}</span></div>` : '';
 
@@ -583,7 +583,7 @@
 
   // ================= 사고 =================
   function viewIncidents(v) {
-    v.innerHTML = `<div class="card"><div class="card-h"><div><h2>사고 기록</h2><p>자동 차단과 허니키 탐지가 남긴 기록이에요</p></div></div><div class="list" id="incList"></div></div>`;
+    v.innerHTML = `<div class="card" style="max-width:880px"><div class="card-h"><h2>사고 기록</h2><div class="spacer"></div><span class="muted" id="incCount"></span></div><div class="list" id="incList"></div></div>`;
     loadIncidents();
   }
 
@@ -599,7 +599,8 @@
           <div class="row-b"><div class="row-t"><span>${hk ? '허니키 사용 탐지' : `${esc(i.credential_masked)} 유출 차단`}</span><span class="badge ${done ? 'ok' : hk ? 'warn' : 'bad'}">${{ OPEN: '진행 중', ROTATED: '전환됨', RESOLVED: '복구됨' }[i.status] || i.status}</span></div>
           <div class="row-s">${time(i.detected_at)} · ${hk ? esc((i.timeline[0] || {}).detail || '') : `손실 ${n(i.loss_calls)}건 / 한도 ${n(i.limit_calls)}건${i.new_credential_masked ? ` · ${esc(i.new_credential_masked)}로 전환` : ''}`}</div></div>
           <div class="row-e">${icon('arrow', 'width="18" height="18" style="color:var(--ink-4)"')}</div></div>`;
-      }).join('') || `<div class="empty">${icon('shield')}아직 사고가 없어요</div>`;
+      }).join('') || `<div class="empty" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span style="flex:1;min-width:220px">아직 사고가 없어요. 자동 차단이나 허니키 탐지가 일어나면 시각, 새어 나간 호출 수, 전환한 키가 여기에 남아요.</span><button class="btn sm soft" onclick="document.getElementById('demoBtn').click()">${icon('play')}데모 제어 열기</button></div>`;
+      $('#incCount').textContent = list.length ? `${n(list.length)}건` : '';
       $$('[data-inc]', host).forEach((r) => { r.onclick = () => incidentSheet(+r.dataset.inc); });
     } catch (e) { toast(e.message, 'bad'); }
   }
@@ -670,14 +671,14 @@
           <button class="ctl" id="dReset"><span class="row-ic sm">${icon('refresh')}</span><b>데모 초기화</b><span>키 3개·직원 2명·허니키를 새로 심어요</span></button>
           <button class="ctl" id="dAttack"><span class="row-ic sm bad">${icon('bolt')}</span><b id="dAttackT">공격 시작</b><span>유출 키로 공급자를 직접 초당 5회 호출</span></button>
           <button class="ctl" id="dOutside"><span class="row-ic sm gray">${icon('globe')}</span><b>외부 IP에서 호출</b><span>203.0.113.57 → 403을 받아요</span></button>
-          <button class="ctl" id="dHoney"><span class="row-ic sm warn">${icon('honey')}</span><b>허니키로 침입</b><span>가짜 토큰 사용 → IP 10분 차단</span></button>
+          <button class="ctl" id="dHoney"><span class="row-ic sm warn">${icon('honey')}</span><b>허니키로 침입</b><span>가짜 토큰 사용 → 전체 토큰 폐기·서비스 정지</span></button>
           <button class="ctl" id="dWif"><span class="row-ic sm">${icon('id')}</span><b>WIF로 호출</b><span>로컬 IdP JWT로 게이트웨이 인증</span></button>
           <button class="ctl" id="dSuspend"><span class="row-ic sm gray">${icon('pause')}</span><b>직원B 정지</b><span>정지된 서비스는 403</span></button>
         </div>
         <div class="ctl-row" style="margin-top:12px"><div class="row-ic">${icon('users')}</div><div class="row-b"><div class="row-t"><span>직원 정상 호출</span></div><div class="row-s" id="dTrafficS">직원A·B가 1.5초마다 게이트웨이로 호출해요</div></div><label class="switch"><input type="checkbox" id="dTraffic" ${st.traffic ? 'checked' : ''} aria-label="직원 정상 호출"><span></span></label></div>
         <div class="ctl-row"><div class="row-ic">${icon('plug')}</div><div class="row-b"><div class="row-t"><span>실제 공급자로 초기화</span></div><div class="row-s">게이트웨이 .env의 관리 키가 필요해요</div></div><div class="row-e"><button class="btn sm soft" data-rp="openrouter">OpenRouter</button><button class="btn sm soft" data-rp="openai">OpenAI</button></div></div>
-        <div class="ctl-row"><div class="row-ic gray">${icon('trash')}</div><div class="row-b"><div class="row-t"><span>발표 후 실제 키 정리</span></div><div class="row-s">november- 로 시작하는 키만 지워요</div></div><div class="row-e"><button class="btn sm gray" data-cl="openrouter">OpenRouter</button><button class="btn sm gray" data-cl="openai">OpenAI</button></div></div>
-        <div class="ctl-row"><div class="row-ic">${icon('external')}</div><div class="row-b"><div class="row-t"><span>발표 화면</span></div><div class="row-s">${live ? '링크에 서버 주소가 들어가요. 관리자 키는 들어가지 않아요' : '청중은 유출 키로, 직원은 게이트웨이로 채팅해요'}</div></div><div class="row-e"><button class="btn sm" id="dQr">청중 QR</button><a class="btn sm soft" href="${esc(API.shareLink('employee.html'))}" target="_blank" rel="noopener">직원</a></div></div>`,
+        <div class="ctl-row"><div class="row-ic gray">${icon('trash')}</div><div class="row-b"><div class="row-t"><span>시연 후 실제 키 정리</span></div><div class="row-s">november- 로 시작하는 키만 지워요</div></div><div class="row-e"><button class="btn sm gray" data-cl="openrouter">OpenRouter</button><button class="btn sm gray" data-cl="openai">OpenAI</button></div></div>
+        <div class="ctl-row"><div class="row-ic">${icon('external')}</div><div class="row-b"><div class="row-t"><span>발표 화면</span></div><div class="row-s">${live ? '링크에 서버 주소가 들어가요. 관리자 키는 들어가지 않아요' : '공격자는 유출 키로, 직원은 게이트웨이로 채팅해요'}</div></div><div class="row-e"><button class="btn sm" id="dQr">공격자 화면 QR</button><a class="btn sm soft" href="${esc(API.shareLink('employee.html'))}" target="_blank" rel="noopener">직원</a></div></div>`,
       onMount(el) {
         const sync = () => {
           const on = st.dash && st.dash.attack_running;
@@ -687,7 +688,7 @@
           $('#dAttack', el).classList.toggle('on', !!on);
           $('#dAttack', el).disabled = mockOnly;
           $('#dAttackT', el).textContent = on ? '공격 중지' : '공격 시작';
-          $('#dAttack span:last-child', el).textContent = mockOnly ? `Mock 모드 전용이에요. ${prov}는 청중 화면으로 시연하세요` : '유출 키로 공급자를 직접 초당 5회 호출';
+          $('#dAttack span:last-child', el).textContent = mockOnly ? `Mock 모드 전용이에요. ${prov}는 공격자 화면으로 시연하세요` : '유출 키로 공급자를 직접 초당 5회 호출';
         };
         sync();
         const iv = setInterval(sync, 800);
@@ -698,7 +699,7 @@
           await API.reset('mock'); resetLocal(); toast('초기화했어요. 새 토큰이 발급됐어요', 'ok');
           if (!st.traffic) setTraffic(true);
         });
-        $$('[data-rp]', el).forEach((b) => { b.onclick = run(b, async () => { if (!await confirmSheet({ title: `${b.dataset.rp}로 초기화할까요?`, desc: '기존 november- 키를 지우고 주/예비 키를 새로 만들어요.', ok: '초기화' })) return; toast('실제 키를 만드는 중이에요…'); const r = await API.reset(b.dataset.rp); resetLocal(); if (r.leaked_key) secretSheet('유출용 주 키를 만들었어요', '청중 화면이 이 키를 써요.', r.leaked_key); }); });
+        $$('[data-rp]', el).forEach((b) => { b.onclick = run(b, async () => { if (!await confirmSheet({ title: `${b.dataset.rp}로 초기화할까요?`, desc: '기존 november- 키를 지우고 주/예비 키를 새로 만들어요.', ok: '초기화' })) return; toast('실제 키를 만드는 중이에요…'); const r = await API.reset(b.dataset.rp); resetLocal(); if (r.leaked_key) secretSheet('유출용 주 키를 만들었어요', '공격자 화면이 이 키를 써요.', r.leaked_key); }); });
         $('#dAttack', el).onclick = run($('#dAttack', el), async () => {
           if (st.dash && st.dash.attack_running) { await API.attackStop(); toast('공격을 멈췄어요'); } else { await API.attackStart(); toast('공격을 시작했어요. 공급자 선만 올라가요', 'warn'); }
         });
@@ -707,7 +708,7 @@
           if (!tok) return toast('먼저 데모 초기화를 해 주세요', 'warn');
           try { await API.chat({ token: tok[1], message: '외부에서 접속', ip: '203.0.113.57' }); toast('통과했어요 (허용 대역을 확인하세요)', 'warn'); } catch (e) { toast(`${e.status} · ${e.message}`, 'bad'); }
         });
-        $('#dHoney', el).onclick = run($('#dHoney', el), async () => { const r = await API.honeypot(); toast(`${r.source_ip}에 ${r.status_code}을 돌려주고 IP를 막았어요`, 'warn'); });
+        $('#dHoney', el).onclick = run($('#dHoney', el), async () => { const r = await API.honeypot(); toast(`${r.source_ip}에 ${r.status_code}을 돌려주고 전체 토큰을 폐기했어요`, 'warn'); });
         $('#dWif', el).onclick = run($('#dWif', el), async () => {
           await API.wifSeed();
           const { token } = await API.wifToken();
@@ -730,7 +731,7 @@
     });
   }
 
-  // 청중 QR: 슬라이드·프로젝터에 띄워 폰으로 바로 접속하게 한다
+  // 공격자 화면 QR: 슬라이드·프로젝터에 띄워 폰으로 바로 접속하게 한다
   let qrLib = null;
   function loadQr() {
     qrLib ||= new Promise((ok, fail) => {
@@ -743,7 +744,7 @@
   }
   function qrSheet(url) {
     sheet({
-      title: '청중 채팅 QR', desc: API.mode === 'live' ? '폰 카메라로 찍으면 유출 키 채팅 화면이 열려요.' : '지금은 시뮬레이션이라 폰마다 따로 움직여요. 실서버에 연결하면 모두 같은 키를 써요.',
+      title: '공격자 화면 QR', desc: API.mode === 'live' ? '폰 카메라로 찍으면 유출 키 채팅 화면이 열려요.' : '지금은 시뮬레이션이라 폰마다 따로 움직여요. 실서버에 연결하면 모두 같은 유출 키를 써요.',
       body: `<div style="display:grid;place-items:center;padding:8px 0 4px"><div id="qrBox" style="background:#fff;padding:14px;border-radius:20px;width:min(300px,80vw);aspect-ratio:1;display:grid;place-items:center"><div class="skeleton" style="width:100%;height:100%"></div></div></div>
         <div class="secret-box" style="margin-top:14px"><span>${esc(url)}</span><button class="icon-btn" id="qrCopy" aria-label="링크 복사">${icon('copy')}</button></div>
         <div class="sheet-f"><a class="btn gray" href="${esc(url)}" target="_blank" rel="noopener">${icon('external')}열어 보기</a><button class="btn" data-close>닫기</button></div>`,
@@ -796,8 +797,8 @@
         <div class="callout ${API.mode === 'live' ? 'info' : ''}">${icon(API.mode === 'live' ? 'check' : 'plug')}<span>${API.mode === 'live' ? `지금 실서버(${esc(c.api)})에 연결돼 있어요.` : '지금은 브라우저 안 시뮬레이션이에요. 백엔드 없이도 같은 흐름을 보여 줘요.'}</span></div>
         <div class="inline-form" style="margin-bottom:16px"><button class="chip" data-pre="https://hack.sio2.kr|https://hack.sio2.kr">${icon('globe', 'width="14" height="14"')}테스트 서버 hack.sio2.kr</button><button class="chip" data-pre="http://localhost:8000|http://localhost:9000">${icon('plug', 'width="14" height="14"')}내 컴퓨터 (8000 · 9000)</button></div>
         <label class="field"><span>게이트웨이 주소</span><input class="input mono" id="cApi" value="${esc(c.api)}"></label>
-        <label class="field"><span>Mock Provider 주소 (청중 화면용)</span><input class="input mono" id="cMock" value="${esc(c.mock)}"></label>
-        <label class="field"><span>관리자 키 (X-Admin-Key)</span><input class="input mono" id="cKey" value="${esc(c.key)}" type="password" autocomplete="off"><small>테스트 서버 키는 담당자에게 따로 받아요. 이 브라우저에만 저장되고 청중 링크·QR에는 들어가지 않아요.</small></label>
+        <label class="field"><span>Mock Provider 주소 (공격자 화면용)</span><input class="input mono" id="cMock" value="${esc(c.mock)}"></label>
+        <label class="field"><span>관리자 키 (X-Admin-Key)</span><input class="input mono" id="cKey" value="${esc(c.key)}" type="password" autocomplete="off"><small>테스트 서버 키는 담당자에게 따로 받아요. 이 브라우저에만 저장되고 공격자 링크·QR에는 들어가지 않아요.</small></label>
         <div class="sheet-f"><button class="btn gray" data-close>취소</button><button class="btn" id="cGo">저장하고 다시 연결</button></div>`,
       onMount(el) {
         let mode = c.mode;
@@ -855,10 +856,9 @@
 
   function setConn(ok, err) {
     const chip = $('#connChip');
-    // 점: 실서버에 붙기 전(시뮬레이션·오류)은 빨강, 붙은 뒤는 초록. 글자도 상태를 함께 말한다
     chip.classList.toggle('on', ok && API.mode === 'live');
-    chip.classList.remove('sim');
-    $('#connText').textContent = !ok ? (err && err.status === 401 ? '관리자 키 오류' : '실제 API 연결 끊김') : API.mode === 'live' ? '실제 API 연결됨' : '실제 API 연결';
+    chip.classList.toggle('sim', ok && API.mode === 'sim');
+    $('#connText').textContent = !ok ? (err && err.status === 401 ? '관리자 키 오류' : '연결 끊김') : API.mode === 'live' ? '실서버 연결됨' : '시뮬레이션';
   }
 
   // ================= 시작 =================
@@ -866,7 +866,6 @@
   $('#themeBtn').onclick = () => { UI.toggleTheme(); setThemeIcon(); if (st.page === 'home') refreshChart(); };
   setThemeIcon();
   $('#demoBtn').onclick = demoSheet;
-  $('#demoBtnM').onclick = demoSheet;
   $('#connChip').onclick = connSheet;
 
   (async () => {

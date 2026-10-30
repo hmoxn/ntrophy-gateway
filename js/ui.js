@@ -130,14 +130,6 @@
 
   // ---------- 두 선 차트 (게이트웨이 vs 공급자, 호출 수) ----------
   // 축 하나, 2px 선, 4개 이하 시리즈라 끝에 직접 라벨, 크로스헤어 툴팁
-  // 눈금: 1·2·2.5·5×10^k 간격으로 4칸, 맨 위 눈금은 최댓값보다 위에 둔다
-  function niceTicks(maxV, count = 4) {
-    const raw = maxV * 1.05 / count, p = 10 ** Math.floor(Math.log10(raw));
-    const step = [1, 2, 2.5, 5, 10].map((k) => k * p).find((s) => s >= raw);
-    const st = step < 1 ? 1 : Math.ceil(step);
-    return Array.from({ length: count + 1 }, (_, i) => i * st);
-  }
-
   function lineChart(host, { series, refY, refLabel, fmt = (v) => n(v), xfmt = (t) => time(t, false) }) {
     const W = host.clientWidth || 600, H = host.clientHeight || 240;
     const m = { l: 40, r: 64, t: 14, b: 26 };
@@ -146,10 +138,11 @@
     const xs = pts.map((p) => +new Date(p.t));
     const x0 = xs[0], x1 = xs[xs.length - 1] || x0 + 1;
     const maxV = Math.max(4, refY || 0, ...series.flatMap((s) => s.points.map((p) => p.v)));
-    const ticks = niceTicks(maxV), niceMax = ticks[ticks.length - 1];
+    const niceMax = (() => { const p = 10 ** Math.floor(Math.log10(maxV)); return Math.ceil(maxV / p * 1.1) * p; })();
     const X = (t) => m.l + (W - m.l - m.r) * ((t - x0) / Math.max(1, x1 - x0));
     const Y = (v) => H - m.b - (H - m.t - m.b) * (v / niceMax);
     const path = (ps) => ps.map((p, i) => `${i ? 'L' : 'M'}${X(+new Date(p.t)).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
+    const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => niceMax * f);
     const xt = [0, 0.5, 1].map((f) => x0 + (x1 - x0) * f);
     if (x1 - x0 < 180000) xfmt = (t) => time(t); // 3분 미만이면 초까지
 
@@ -201,15 +194,15 @@
     const W = host.clientWidth || 600, H = host.clientHeight || 200;
     const m = { l: 36, r: 8, t: 12, b: 24 };
     const maxV = Math.max(1, ...points.map((p) => p.v));
-    const yt = niceTicks(maxV), top = yt[yt.length - 1];
+    const top = (() => { const p = 10 ** Math.floor(Math.log10(maxV)); return Math.ceil(maxV / p) * p; })();
     const slot = (W - m.l - m.r) / points.length, bw = Math.max(4, Math.min(36, slot - 6));
     const Y = (v) => H - m.b - (H - m.t - m.b) * (v / top);
     const every = Math.ceil(points.length / Math.max(1, Math.floor((W - m.l) / 46)));
     host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="시간대별 호출 수">
-      ${yt.map((v) => `<line class="grid-l" x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}"/><text class="axis-t" x="${m.l - 8}" y="${Y(v) + 4}" text-anchor="end">${fmt(v)}</text>`).join('')}
+      ${[0, 0.5, 1].map((f) => `<line class="grid-l" x1="${m.l}" x2="${W - m.r}" y1="${Y(top * f)}" y2="${Y(top * f)}"/><text class="axis-t" x="${m.l - 8}" y="${Y(top * f) + 4}" text-anchor="end">${fmt(top * f)}</text>`).join('')}
       ${points.map((p, i) => { const x = m.l + slot * i + (slot - bw) / 2, y = Y(p.v), h = Math.max(0, H - m.b - y);
         return `<g class="bar" data-i="${i}"><rect x="${m.l + slot * i}" y="${m.t}" width="${slot}" height="${H - m.t - m.b}" fill="transparent"/>
-        ${h >= 4 ? `<path d="M${x},${H - m.b}V${y + 4}q0,-4 4,-4h${bw - 8}q4,0 4,4V${H - m.b}Z" fill="var(--gw)" opacity="${p.dim ? 0.35 : 1}"/>` : `<rect x="${x}" y="${y}" width="${bw}" height="${h}" fill="var(--gw)"/>`}
+        ${h >= 4 ? `<path d="M${x},${H - m.b}V${y + 4}q0,-4 4,-4h${bw - 8}q4,0 4,4V${H - m.b}Z" fill="var(--brand)" opacity="${p.dim ? 0.35 : 1}"/>` : `<rect x="${x}" y="${y}" width="${bw}" height="${h}" fill="var(--brand)"/>`}
         ${i % every === 0 ? `<text class="axis-t" x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${esc(p.label)}</text>` : ''}</g>`; }).join('')}
     </svg><div class="tip"></div>`;
     const t = $('.tip', host);
