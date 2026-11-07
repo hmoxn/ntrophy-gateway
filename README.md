@@ -1,6 +1,8 @@
 # Ntrophy Gateway — 웹 화면
 
 [NovemberApiGateway](https://github.com/Seokyoung-Hong/NovemberApiGateway)(AI API 키 유출을 사용량 대조로 탐지하고 자동 차단하는 게이트웨이)의 기능을 모두 버튼과 화면으로 옮긴 프론트엔드입니다.
+
+프론트엔드 최종 완성본은 옆에 git 주소에서 업로드했습니다.(https://github.com/danmuzzi/ntrophy-gateway)
 설치 없이 `index.html`을 브라우저로 열면 **브라우저 안 시뮬레이션**으로 전체 흐름이 그대로 움직입니다.
 
 ## 화면
